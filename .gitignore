@@ -1,0 +1,43 @@
+# Blender / Python
+__pycache__/
+*.py[cod]
+*.blend1
+*.blend2
+
+# Worker virtual environment (never packaged, never committed)
+.venv/
+venv/
+
+# Third-party model weights and configs - users download these themselves.
+# See docs/INSTALL.md and models/manifest.example.json.
+models/**/*.pth
+models/**/*.task
+models/**/*.onnx
+models/**/*.pt
+models/**/*.ckpt
+models/**/*.py
+# The user's own manifest copy is local configuration.
+models/manifest.json
+# ...but the bundled template must always be tracked.
+!models/manifest.example.json
+
+# Per-job scratch data and logs
+.mocap_jobs/
+*.log
+worker.log
+
+# Build output
+dist/
+
+# Test media (large binaries stay out of the repository)
+tests/fixtures/*.mp4
+tests/fixtures/*.mov
+tests/fixtures/*.avi
+tests/fixtures/*.mkv
+
+# Editors / OS
+.idea/
+.vscode/
+.pytest_cache/
+Thumbs.db
+desktop.ini

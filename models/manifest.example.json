@@ -1,0 +1,305 @@
+{
+  "schema_version": "0.1",
+  "manual_download_only": true,
+  "models_root_hint": "D:/blender_addons/motion_capture/models",
+  "worker_python_hint": "D:/blender_addons/motion_capture/.venv/Scripts/python.exe",
+  "profiles": {
+    "preview": {
+      "display_name": "Preview",
+      "description": "Fast local preview using MediaPipe Pose. Only the body pose model is required."
+    },
+    "quality": {
+      "display_name": "High Quality",
+      "description": "Default high quality offline pipeline using RTMDet-m, RTMPose-m, and MotionBERT."
+    },
+    "quality_plus": {
+      "display_name": "High Quality Plus",
+      "description": "Optional enhanced body 2D pipeline using RTMPose-x. Falls back to quality when unavailable."
+    },
+    "fallback_cpu": {
+      "display_name": "CPU Fallback",
+      "description": "Reduced quality fallback for machines without CUDA or when CUDA checks fail."
+    },
+    "hand_enhanced": {
+      "display_name": "Enhanced Hands",
+      "description": "Optional hand detection and hand pose models for more detailed finger motion."
+    }
+  },
+  "artifacts": [
+    {
+      "id": "mediapipe_pose_full",
+      "kind": "weights",
+      "framework": "mediapipe",
+      "display_name": "MediaPipe Pose Landmarker Full",
+      "purpose": "Fast body pose preview and fallback body capture.",
+      "required": true,
+      "profiles": ["preview", "fallback_cpu"],
+      "relative_path": "mediapipe/pose_landmarker_full.task",
+      "download_url": "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task",
+      "fallback": "If missing, preview capture is disabled until the user downloads the file."
+    },
+    {
+      "id": "mediapipe_pose_heavy",
+      "kind": "weights",
+      "framework": "mediapipe",
+      "display_name": "MediaPipe Pose Landmarker Heavy",
+      "purpose": "Higher quality MediaPipe preview body pose.",
+      "required": false,
+      "profiles": ["preview"],
+      "relative_path": "mediapipe/pose_landmarker_heavy.task",
+      "download_url": "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task",
+      "fallback": "Use mediapipe_pose_full."
+    },
+    {
+      "id": "mediapipe_pose_lite",
+      "kind": "weights",
+      "framework": "mediapipe",
+      "display_name": "MediaPipe Pose Landmarker Lite",
+      "purpose": "Low resource body pose fallback.",
+      "required": false,
+      "profiles": ["fallback_cpu"],
+      "relative_path": "mediapipe/pose_landmarker_lite.task",
+      "download_url": "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+      "fallback": "Use mediapipe_pose_full when available."
+    },
+    {
+      "id": "mediapipe_hand",
+      "kind": "weights",
+      "framework": "mediapipe",
+      "display_name": "MediaPipe Hand Landmarker",
+      "purpose": "Basic hand landmarks for first-version hand capture.",
+      "required": false,
+      "profiles": ["preview", "quality", "fallback_cpu"],
+      "relative_path": "mediapipe/hand_landmarker.task",
+      "download_url": "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+      "fallback": "Disable hand capture; body capture remains available."
+    },
+    {
+      "id": "rtmdet_m_person",
+      "kind": "weights",
+      "framework": "mmdet",
+      "display_name": "RTMDet-m Person",
+      "purpose": "Single-person detection before high quality body pose estimation.",
+      "required": true,
+      "profiles": ["quality", "quality_plus"],
+      "relative_path": "openmmlab/detectors/rtmdet_m_8xb32-100e_coco-obj365-person-235e8209.pth",
+      "download_url": "https://download.openmmlab.com/mmpose/v1/projects/rtmpose/rtmdet_m_8xb32-100e_coco-obj365-person-235e8209.pth",
+      "config_id": "config_rtmdet_m_person",
+      "fallback": "High quality capture is disabled; user may switch to preview."
+    },
+    {
+      "id": "rtmpose_m_body",
+      "kind": "weights",
+      "framework": "mmpose",
+      "display_name": "RTMPose-m Body",
+      "purpose": "Default 2D body pose model for high quality capture.",
+      "required": true,
+      "profiles": ["quality"],
+      "relative_path": "openmmlab/body2d/rtmpose-m_simcc-body7_pt-body7_420e-256x192-e48f03d0_20230504.pth",
+      "download_url": "https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/rtmpose-m_simcc-body7_pt-body7_420e-256x192-e48f03d0_20230504.pth",
+      "config_id": "config_rtmpose_m_body",
+      "fallback": "High quality capture is disabled; user may switch to preview."
+    },
+    {
+      "id": "rtmpose_x_body",
+      "kind": "weights",
+      "framework": "mmpose",
+      "display_name": "RTMPose-x Body 384x288",
+      "purpose": "Optional higher accuracy 2D body pose model.",
+      "required": false,
+      "profiles": ["quality_plus"],
+      "relative_path": "openmmlab/body2d/rtmpose-x_simcc-body7_pt-body7_700e-384x288-71d7b7e9_20230629.pth",
+      "download_url": "https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/rtmpose-x_simcc-body7_pt-body7_700e-384x288-71d7b7e9_20230629.pth",
+      "config_id": "config_rtmpose_x_body",
+      "fallback": "Fall back to rtmpose_m_body."
+    },
+    {
+      "id": "motionbert_body3d",
+      "kind": "weights",
+      "framework": "mmpose",
+      "display_name": "MotionBERT 243-frame",
+      "purpose": "Temporal 3D body pose lifting for high quality video motion capture.",
+      "required": true,
+      "profiles": ["quality", "quality_plus"],
+      "relative_path": "openmmlab/body3d/motionbert_ft_h36m-d80af323_20230531.pth",
+      "download_url": "https://download.openmmlab.com/mmpose/v1/body_3d_keypoint/pose_lift/h36m/motionbert_ft_h36m-d80af323_20230531.pth",
+      "config_id": "config_motionbert_body3d",
+      "fallback": "Use videopose3d_body3d only when explicitly configured; otherwise disable high quality 3D capture."
+    },
+    {
+      "id": "videopose3d_body3d",
+      "kind": "weights",
+      "framework": "mmpose",
+      "display_name": "VideoPose3D 243-frame",
+      "purpose": "Optional 3D body pose fallback.",
+      "required": false,
+      "profiles": ["quality"],
+      "relative_path": "openmmlab/body3d/videopose_h36m_243frames_fullconv_supervised_cpn_ft-88f5abbb_20210527.pth",
+      "download_url": "https://download.openmmlab.com/mmpose/body3d/videopose/videopose_h36m_243frames_fullconv_supervised_cpn_ft-88f5abbb_20210527.pth",
+      "fallback": "Use motionbert_body3d."
+    },
+    {
+      "id": "rtmdet_nano_hand",
+      "kind": "weights",
+      "framework": "mmdet",
+      "display_name": "RTMDet-nano Hand",
+      "purpose": "Optional hand detection for enhanced hand capture.",
+      "required": false,
+      "profiles": ["hand_enhanced"],
+      "relative_path": "openmmlab/detectors/rtmdet_nano_8xb32-300e_hand-267f9c8f.pth",
+      "download_url": "https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/rtmdet_nano_8xb32-300e_hand-267f9c8f.pth",
+      "config_id": "config_rtmdet_nano_hand",
+      "fallback": "Disable enhanced hand capture; body capture remains available."
+    },
+    {
+      "id": "rtmpose_m_hand5",
+      "kind": "weights",
+      "framework": "mmpose",
+      "display_name": "RTMPose-m Hand5",
+      "purpose": "Optional 2D hand keypoints for enhanced hand capture.",
+      "required": false,
+      "profiles": ["hand_enhanced"],
+      "relative_path": "openmmlab/hand2d/rtmpose-m_simcc-hand5_pt-aic-coco_210e-256x256-74fb594_20230320.pth",
+      "download_url": "https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/rtmpose-m_simcc-hand5_pt-aic-coco_210e-256x256-74fb594_20230320.pth",
+      "config_id": "config_rtmpose_m_hand5",
+      "fallback": "Disable enhanced hand capture; body capture remains available."
+    },
+    {
+      "id": "internet_hand3d",
+      "kind": "weights",
+      "framework": "mmpose",
+      "display_name": "InterNet InterHand3D",
+      "purpose": "Optional 3D hand pose estimation for enhanced hand capture.",
+      "required": false,
+      "profiles": ["hand_enhanced"],
+      "relative_path": "openmmlab/hand3d/res50_intehand3dv1.0_all_256x256-42b7f2ac_20210702.pth",
+      "download_url": "https://download.openmmlab.com/mmpose/hand3d/internet/res50_intehand3dv1.0_all_256x256-42b7f2ac_20210702.pth",
+      "config_id": "config_internet_hand3d",
+      "fallback": "Disable enhanced hand capture; body capture remains available."
+    },
+    {
+      "id": "config_rtmdet_m_person",
+      "kind": "config",
+      "framework": "mmdet",
+      "display_name": "RTMDet-m Person Config",
+      "purpose": "MMPose/MMDetection config for RTMDet-m person detection.",
+      "required": true,
+      "profiles": ["quality", "quality_plus"],
+      "relative_path": "openmmlab/configs/rtmdet_m_640-8xb32_coco-person.py",
+      "download_url": "https://raw.githubusercontent.com/open-mmlab/mmpose/main/demo/mmdetection_cfg/rtmdet_m_640-8xb32_coco-person.py",
+      "fallback": "High quality capture is disabled; user may switch to preview."
+    },
+    {
+      "id": "config_rtmpose_m_body",
+      "kind": "config",
+      "framework": "mmpose",
+      "display_name": "RTMPose-m Body Config",
+      "purpose": "MMPose config for the default RTMPose-m body model.",
+      "required": true,
+      "profiles": ["quality"],
+      "relative_path": "openmmlab/configs/rtmpose-m_8xb256-420e_body8-256x192.py",
+      "download_url": "https://raw.githubusercontent.com/open-mmlab/mmpose/main/configs/body_2d_keypoint/rtmpose/body8/rtmpose-m_8xb256-420e_body8-256x192.py",
+      "fallback": "High quality capture is disabled; user may switch to preview."
+    },
+    {
+      "id": "config_rtmpose_x_body",
+      "kind": "config",
+      "framework": "mmpose",
+      "display_name": "RTMPose-x Body Config",
+      "purpose": "MMPose config for optional RTMPose-x quality_plus body model.",
+      "required": false,
+      "profiles": ["quality_plus"],
+      "relative_path": "openmmlab/configs/rtmpose-x_8xb256-700e_coco-384x288.py",
+      "download_url": "https://raw.githubusercontent.com/open-mmlab/mmpose/main/projects/rtmpose/rtmpose/body_2d_keypoint/rtmpose-x_8xb256-700e_coco-384x288.py",
+      "fallback": "Fall back to config_rtmpose_m_body and rtmpose_m_body."
+    },
+    {
+      "id": "config_motionbert_body3d",
+      "kind": "config",
+      "framework": "mmpose",
+      "display_name": "MotionBERT Config",
+      "purpose": "MMPose config for MotionBERT 3D pose lifting.",
+      "required": true,
+      "profiles": ["quality", "quality_plus"],
+      "relative_path": "openmmlab/configs/motionbert_dstformer-ft-243frm_8xb32-120e_h36m.py",
+      "download_url": "https://raw.githubusercontent.com/open-mmlab/mmpose/main/configs/body_3d_keypoint/motionbert/h36m/motionbert_dstformer-ft-243frm_8xb32-120e_h36m.py",
+      "fallback": "High quality 3D capture is disabled unless videopose3d is configured."
+    },
+    {
+      "id": "config_rtmdet_nano_hand",
+      "kind": "config",
+      "framework": "mmdet",
+      "display_name": "RTMDet-nano Hand Config",
+      "purpose": "MMDetection config for optional hand detection.",
+      "required": false,
+      "profiles": ["hand_enhanced"],
+      "relative_path": "openmmlab/configs/rtmdet_nano_320-8xb32_hand.py",
+      "download_url": "https://raw.githubusercontent.com/open-mmlab/mmpose/main/demo/mmdetection_cfg/rtmdet_nano_320-8xb32_hand.py",
+      "fallback": "Disable enhanced hand capture; body capture remains available."
+    },
+    {
+      "id": "config_rtmpose_m_hand5",
+      "kind": "config",
+      "framework": "mmpose",
+      "display_name": "RTMPose-m Hand5 Config",
+      "purpose": "MMPose config for optional 2D hand keypoints.",
+      "required": false,
+      "profiles": ["hand_enhanced"],
+      "relative_path": "openmmlab/configs/rtmpose-m_8xb256-210e_hand5-256x256.py",
+      "download_url": "https://raw.githubusercontent.com/open-mmlab/mmpose/main/configs/hand_2d_keypoint/rtmpose/hand5/rtmpose-m_8xb256-210e_hand5-256x256.py",
+      "fallback": "Disable enhanced hand capture; body capture remains available."
+    },
+    {
+      "id": "config_internet_hand3d",
+      "kind": "config",
+      "framework": "mmpose",
+      "display_name": "InterNet Hand3D Config",
+      "purpose": "MMPose config for optional InterNet 3D hand pose estimation.",
+      "required": false,
+      "profiles": ["hand_enhanced"],
+      "relative_path": "openmmlab/configs/internet_res50_4xb16-20e_interhand3d-256x256.py",
+      "download_url": "https://raw.githubusercontent.com/open-mmlab/mmpose/main/configs/hand_3d_keypoint/internet/interhand3d/internet_res50_4xb16-20e_interhand3d-256x256.py",
+      "fallback": "Disable enhanced hand capture; body capture remains available."
+    }
+  ],
+  "preflight_rules": {
+    "preview": {
+      "required_artifact_ids": ["mediapipe_pose_full"],
+      "optional_artifact_ids": ["mediapipe_hand", "mediapipe_pose_heavy", "mediapipe_pose_lite"]
+    },
+    "quality": {
+      "required_artifact_ids": [
+        "rtmdet_m_person",
+        "config_rtmdet_m_person",
+        "rtmpose_m_body",
+        "config_rtmpose_m_body",
+        "motionbert_body3d",
+        "config_motionbert_body3d"
+      ],
+      "optional_artifact_ids": ["mediapipe_hand", "videopose3d_body3d"]
+    },
+    "quality_plus": {
+      "required_artifact_ids": [
+        "rtmdet_m_person",
+        "config_rtmdet_m_person",
+        "rtmpose_x_body",
+        "config_rtmpose_x_body",
+        "motionbert_body3d",
+        "config_motionbert_body3d"
+      ],
+      "fallback_profile": "quality"
+    },
+    "hand_enhanced": {
+      "required_artifact_ids": [],
+      "optional_artifact_ids": [
+        "rtmdet_nano_hand",
+        "config_rtmdet_nano_hand",
+        "rtmpose_m_hand5",
+        "config_rtmpose_m_hand5",
+        "internet_hand3d",
+        "config_internet_hand3d"
+      ],
+      "missing_behavior": "Disable enhanced hand capture only."
+    }
+  }
+}

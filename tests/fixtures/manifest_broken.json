@@ -1,0 +1,6 @@
+{
+  "schema_version": "0.1",
+  "artifacts": [
+    {"id": "broken", "kind": "weights"
+  ]
+}
