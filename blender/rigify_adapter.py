@@ -7,7 +7,8 @@ message and DEF deform bones are never written.
 Design notes
 ------------
 
-* Target world rotations are computed with the framework-free maths in
+* World-space source directions are converted to armature object space before
+  computing target rotations with the framework-free maths in
   ``core.retarget_math``; ``mathutils`` is used only to read rest matrices and to
   write pose matrices.
 * Rotations are applied through ``pose_bone.matrix`` in hierarchy order with a
@@ -40,7 +41,7 @@ from __future__ import annotations
 import bpy
 from mathutils import Matrix, Quaternion, Vector
 
-from ..core import errors, result_schema, skeleton
+from ..core import errors, pose_calibration, result_schema, skeleton
 from ..core import retarget_math as rm
 
 #: Rotation mode forced on every driven control bone (guide section 10.3).
@@ -302,6 +303,7 @@ class RetargetOptions(object):
         "frame_step",
         "action_name",
         "progress",
+        "pitch_correction",
     )
 
     def __init__(
@@ -314,6 +316,7 @@ class RetargetOptions(object):
         frame_step: int = 1,
         action_name: str = "",
         progress=None,
+        pitch_correction: float = 0.0,
     ) -> None:
         self.root_motion = root_motion
         self.include_hands = bool(include_hands)
@@ -323,6 +326,7 @@ class RetargetOptions(object):
         self.frame_step = max(1, int(frame_step))
         self.action_name = action_name
         self.progress = progress
+        self.pitch_correction = float(pitch_correction)
 
 
 def _source_reference(frame, ref: str):
@@ -341,8 +345,8 @@ def _source_reference(frame, ref: str):
     return delta if rm.vec_length(delta) > 1e-6 else None
 
 
-def _target_rotation(chain, frame):
-    """World-space rotation for ``chain`` at ``frame``, or ``None`` when unusable."""
+def _target_rotation(chain, frame, world_to_pose=None):
+    """Pose-space rotation delta for a world-space source direction."""
     spec = chain.spec
     if spec.source is None:
         return None
@@ -354,12 +358,16 @@ def _target_rotation(chain, frame):
     if start is None or end is None:
         return None
     direction = rm.vec_sub(end, start)
+    if world_to_pose is not None:
+        direction = tuple(world_to_pose @ Vector(direction))
     if rm.vec_length(direction) < 1e-6:
         return None
 
     if spec.mode == skeleton.MODE_AIM_REF:
         source_reference = _source_reference(frame, spec.ref)
         if source_reference is not None:
+            if world_to_pose is not None:
+                source_reference = tuple(world_to_pose @ Vector(source_reference))
             return rm.aim_rotation_with_reference(
                 chain.rest_direction, chain.rest_reference, direction, source_reference
             )
@@ -397,13 +405,12 @@ def _switch_to_fk(armature, frame: int) -> list:
     return switched
 
 
-def _apply_world_rotation(pose_bone, armature, quaternion) -> None:
-    """Set a bone's world rotation while preserving its evaluated head position."""
-    world_quat = Quaternion(
+def _apply_pose_rotation(pose_bone, quaternion) -> None:
+    """Set pose-space orientation while preserving the evaluated head position."""
+    pose_quat = Quaternion(
         (float(quaternion[0]), float(quaternion[1]), float(quaternion[2]), float(quaternion[3]))
     )
-    rest_world = armature.matrix_world @ pose_bone.bone.matrix_local
-    target = world_quat.to_matrix().to_4x4() @ rest_world
+    target = pose_quat.to_matrix().to_4x4() @ pose_bone.bone.matrix_local
     # Keep the position the parent chain already determined; only rotate.
     target.translation = pose_bone.matrix.translation
     pose_bone.matrix = target
@@ -418,8 +425,8 @@ def _apply_root(pose_bone, armature, frame, scale: float, origin, options) -> No
     delta = rm.vec_sub(scaled, origin)
     if options.root_motion == "in_place":
         delta = (0.0, 0.0, delta[2])
-    rest_world = armature.matrix_world @ pose_bone.bone.matrix_local
-    pose_bone.matrix = Matrix.Translation(Vector(delta)) @ rest_world
+    delta_local = armature.matrix_world.inverted().to_3x3() @ Vector(delta)
+    pose_bone.matrix = Matrix.Translation(delta_local) @ pose_bone.bone.matrix_local
 
 
 def _root_scale(result, mapping, options) -> float:
@@ -434,7 +441,8 @@ def _root_scale(result, mapping, options) -> float:
     source_height = sorted(heights)[len(heights) // 2]
     if source_height <= 1e-3 or mapping.pelvis_height <= 1e-3:
         return 1.0
-    return float(mapping.pelvis_height) / float(source_height)
+    world_height = (mapping.armature.matrix_world.to_3x3() @ Vector((0., 0., mapping.pelvis_height))).length
+    return float(world_height) / float(source_height)
 
 
 def _root_origin(result, scale: float) -> tuple:
@@ -499,6 +507,9 @@ def retarget_to_rigify(result, armature, options=None) -> bpy.types.Action:
     if not result.frames:
         raise errors.MocapError(errors.RESULT_SCHEMA_INVALID, "结果中没有任何帧。")
 
+    if options.pitch_correction:
+        result = pose_calibration.calibrated_result(result, options.pitch_correction)
+
     if result_schema.looks_y_up(result):
         warnings.append(
             "[{0}] 结果看起来是 Y 轴向上的数据，但 v0.1 规定 Z 轴向上，动画可能躺倒。".format(
@@ -515,6 +526,8 @@ def retarget_to_rigify(result, armature, options=None) -> bpy.types.Action:
                 )
             )
     if options.flip_x:
+        import copy
+        result = copy.deepcopy(result)
         result_schema.mirror_result_x(result)
 
     mapping = build_rigify_mapping(armature, include_hands=options.include_hands)
@@ -528,6 +541,8 @@ def retarget_to_rigify(result, armature, options=None) -> bpy.types.Action:
     scale = _root_scale(result, mapping, options)
     origin = _root_origin(result, scale)
     depth_groups = _depth_groups(chains)
+    # PoseBone.matrix uses armature object space, even when the object is rotated.
+    world_to_pose = armature.matrix_world.inverted().to_3x3()
 
     previous_active, previous_mode = _activate(armature)
     action = _ensure_action(armature, options.action_name or result.action_name())
@@ -570,11 +585,11 @@ def retarget_to_rigify(result, armature, options=None) -> bpy.types.Action:
                         # Follow the parent exactly: rest orientation relative to it.
                         pose_bone.rotation_quaternion = IDENTITY_QUATERNION
                         continue
-                    rotation = _target_rotation(chain, frame)
+                    rotation = _target_rotation(chain, frame, world_to_pose)
                     if rotation is None:
                         skipped[chain.bone_name] = skipped.get(chain.bone_name, 0) + 1
                         continue
-                    _apply_world_rotation(pose_bone, armature, rotation)
+                    _apply_pose_rotation(pose_bone, rotation)
                 bpy.context.view_layer.update()
 
             for chain in chains:

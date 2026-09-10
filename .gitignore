@@ -6,6 +6,8 @@ __pycache__/
 
 # Worker virtual environment (never packaged, never committed)
 .venv/
+.venv-preview/
+.cache/
 venv/
 
 # Third-party model weights and configs - users download these themselves.
@@ -16,6 +18,7 @@ models/**/*.onnx
 models/**/*.pt
 models/**/*.ckpt
 models/**/*.py
+models/.downloads/
 # The user's own manifest copy is local configuration.
 models/manifest.json
 # ...but the bundled template must always be tracked.

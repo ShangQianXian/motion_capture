@@ -6,6 +6,7 @@ Standard library only.
 from __future__ import annotations
 
 import json
+import math
 import os
 
 from . import errors, paths, skeleton
@@ -163,7 +164,7 @@ def validate_result(data, max_reported: int = 8) -> dict:
         fps = float(data.get("fps", 0))
     except (TypeError, ValueError):
         fps = 0.0
-    if fps <= 0.0:
+    if not math.isfinite(fps) or fps <= 0.0 or isinstance(data.get("fps"), bool):
         problems.append("fps 必须大于 0，实际为 {0!r}".format(data.get("fps")))
 
     frames = data.get("frames")

@@ -12,6 +12,7 @@ breaks property registration.
 """
 
 import time
+import math
 
 import bpy
 from bpy.props import (
@@ -142,6 +143,14 @@ class MotionCaptureSceneProperties(bpy.types.PropertyGroup):
         name=ui_text.PROP_FLIP_X,
         description=ui_text.PROP_FLIP_X_DESC,
         default=False,
+    )
+    pitch_correction: FloatProperty(
+        name=ui_text.PROP_PITCH_CORRECTION,
+        description=ui_text.PROP_PITCH_CORRECTION_DESC,
+        subtype="ANGLE",
+        default=0.0,
+        min=-math.pi,
+        max=math.pi,
     )
     clean_curves: BoolProperty(
         name=ui_text.PROP_CLEAN_CURVES,

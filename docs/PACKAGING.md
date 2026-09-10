@@ -1,5 +1,7 @@
 # 打包与发布
 
+> 当前实现目标：Blender 4.5.0，Python 3.10.0 双 worker 环境。依赖版本、安装与诊断以 [INSTALL.md](INSTALL.md) 和 `requirements/` 为准；下文早期 4.0 兼容记录仅作历史参考。
+
 对应 `docs/DEVELOPMENT_GUIDE.md` §13。
 
 ## 1. 打包
@@ -25,6 +27,7 @@ cd D:\blender_addons\motion_capture
 - `docs/`
 - `models/manifest.example.json`
 - `tools/`（安装、测试、打包、环境引导脚本）
+- `requirements/`（两个环境的核心约束和完整版本锁）
 - `tests/`（不含大体积媒体素材）
 - `README.md`、`.gitignore`
 
@@ -32,9 +35,11 @@ cd D:\blender_addons\motion_capture
 
 | 类别 | 规则 |
 |---|---|
-| 虚拟环境 | `.venv/`、`venv/` |
-| 版本控制与编辑器 | `.git/`、`.idea/`、`.vscode/`、`.agents/` |
-| 缓存 | `__pycache__/`、`.pytest_cache/` |
+| 虚拟环境 | `.venv/`、`.venv-preview/`、`venv/` |
+| 版本控制与编辑器 | `.git/`、`.idea/`、`.vscode/`、`.agents/`、`.codex/` |
+| 缓存与下载状态 | `__pycache__/`、`.pytest_cache/`、`.cache/`、`.downloads/` |
+| 下载的配置 | `models/**/*.py`、配置 `_sources/` 目录 |
+| 用户模型配置 | `models/manifest.json` |
 | 模型权重 | `*.pth`、`*.task`、`*.onnx`、`*.pt`、`*.ckpt` |
 | 任务数据 | `.mocap_jobs/`、`*.log` |
 | 构建产物 | `dist/`、`*.zip` |
@@ -50,10 +55,11 @@ cd D:\blender_addons\motion_capture
 
 必须全部通过：
 
-- [ ] `python -m unittest discover -s tests/unit -t .` 全绿（292 个用例，零第三方依赖）
+- [ ] `.venv/Scripts/python.exe -m unittest discover -s tests/unit -t .` 全绿（326 个用例，也可用零依赖 Python 3.10.0 执行）
 - [ ] `blender --background --factory-startup --python tests/blender/test_enable_addon.py` 退出码 0
 - [ ] `blender --background --factory-startup --python tests/blender/test_mock_retarget.py` 退出码 0
-- [ ] 上述两个 Blender 测试在 **Blender 4.0**、**当前 LTS**、**最新稳定版** 上各跑一次
+- [ ] 上述两个 Blender 测试在目标版本 **Blender 4.5.0** 上通过
+- [ ] 两个 worker 的版本、`pip check`、适配器契约和 Quality 的 CUDA 算子检查通过
 - [ ] 从生成的 zip 全新安装一次，确认能启用、面板出现、mock 流程跑通
 - [ ] `docs/ACCEPTANCE.md` 的手工验收清单已走完（真实模型链路）
 - [ ] `docs/LICENSES.md` 的许可证核查已完成
@@ -62,16 +68,15 @@ cd D:\blender_addons\motion_capture
 
 ## 4. 版本兼容
 
-最低支持 **Blender 4.0**。已实测：
+当前最低版本及验收目标为 **Blender 4.5.0**。本次实测：
 
 | Blender | Python | 状态 |
 |---|---|---|
-| 4.0.2 | 3.10.13 | 通过（46 + 53 项检查） |
-| 4.5.0 | 3.11.11 | 通过（46 + 53 项检查） |
+| 4.5.0 | 3.11.11 | 通过（48 + 63 项检查） |
 
 兼容性注意点：
 
-- 代码必须兼容 **Python 3.10**（Blender 4.0 内置版本）。
+- 共用代码必须兼容外部 worker 的 **Python 3.10.0**；Blender 使用其内置 Python。
 - 不要使用 `action.slots`：该 API 仅 4.4+ 存在，且 4.5.0 上没有 `slots.new_for_id`。
   统一用 `animation_data.action = act` + `keyframe_insert` + `action.fcurves`。
 - `bone.collections`（骨骼集合）在 4.0 与 4.5 上都可用。

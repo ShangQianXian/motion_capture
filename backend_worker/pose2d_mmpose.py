@@ -57,7 +57,7 @@ def require_numpy():
         raise errors.MocapError(
             errors.DEPENDENCY_MISSING,
             "worker 环境缺少 numpy：{0}".format(exc),
-            suggestion="pip install numpy",
+            suggestion="按 docs/INSTALL.md 运行锁定的 worker 环境安装脚本。",
             details={"module": "numpy"},
         )
     return numpy
@@ -70,7 +70,7 @@ def require_mmdet():
         raise errors.MocapError(
             errors.DEPENDENCY_MISSING,
             "worker 环境缺少 mmdet：{0}".format(exc),
-            suggestion="按 docs/INSTALL.md 执行 mim install mmdet。",
+            suggestion="按 docs/INSTALL.md 运行 tools/bootstrap_worker_env.ps1 -Environment quality。",
             details={"module": "mmdet"},
         )
     return init_detector, inference_detector
@@ -83,7 +83,7 @@ def require_mmpose():
         raise errors.MocapError(
             errors.DEPENDENCY_MISSING,
             "worker 环境缺少 mmpose：{0}".format(exc),
-            suggestion="按 docs/INSTALL.md 执行 mim install mmpose。",
+            suggestion="按 docs/INSTALL.md 运行 tools/bootstrap_worker_env.ps1 -Environment quality。",
             details={"module": "mmpose"},
         )
     return init_model, inference_topdown
@@ -140,6 +140,8 @@ class PersonDetector(object):
             reporter.loading_model(model_id=DETECTOR_WEIGHTS)
         try:
             self.model = init_detector(self.config, self.checkpoint, device=device)
+            from mmpose.utils import adapt_mmdet_pipeline
+            self.model.cfg = adapt_mmdet_pipeline(self.model.cfg)
         except Exception as exc:
             if is_cuda_oom(exc):
                 raise oom_error("加载 RTMDet-m", device)
@@ -312,8 +314,7 @@ def coco17_to_h36m17(keypoints, scores):
     out[7] = (out[0] + out[8]) * 0.5                   # spine
     out_conf[7] = min(out_conf[0], out_conf[8])
     out[9], out_conf[9] = points[0], confidence[0]     # neck / nose
-    out[10] = out[8] + (points[0] - out[8]) * 1.5      # head top approximation
-    out_conf[10] = min(out_conf[8], confidence[0])
+    blend(10, (1, 2))          # H36M head: midpoint of the COCO eyes
     out[11], out_conf[11] = points[5], confidence[5]   # left shoulder
     out[12], out_conf[12] = points[7], confidence[7]   # left elbow
     out[13], out_conf[13] = points[9], confidence[9]   # left wrist

@@ -31,7 +31,7 @@ ROOT_MOTION_MODES = ("world", "in_place")
 SCALE_MODES = ("target_rig_height", "raw")
 
 #: Profiles that must run on CPU.
-_CPU_PROFILES = frozenset({"fallback_cpu"})
+_CPU_PROFILES = frozenset({"preview", "fallback_cpu"})
 
 
 def _get(source, name, default=None):

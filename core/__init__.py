@@ -17,6 +17,7 @@ __all__ = [
     "skeleton",
     "job_schema",
     "result_schema",
+    "pose_calibration",
     "progress",
     "smoothing",
     "retarget_math",

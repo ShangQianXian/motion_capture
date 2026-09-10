@@ -265,6 +265,22 @@ def main() -> None:
     harness.check(delta > 1e-4, "thigh_fk.L actually animates (delta {0:.5f})".format(delta))
 
     harness.section("bake")
+    protected = rig.pose.bones['upper_arm_fk.L'].constraints.new('LIMIT_ROTATION')
+    protected.name = 'UserKeepConstraint'
+    temporary = rig.pose.bones['upper_arm_fk.L'].constraints.new('LIMIT_ROTATION')
+    temporary.name = temp_data.temp_name('bake_test')
+    temp_data.register_constraint(rig, 'upper_arm_fk.L', temporary)
+    other = bpy.data.objects.get('metarig')
+    other.hide_set(False)
+    other.select_set(True)
+    other_action = other.animation_data.action if other.animation_data else None
+    other_temp = other.pose.bones[0].constraints.new('LIMIT_ROTATION')
+    other_temp.name = temp_data.temp_name('other_rig')
+    other_temp_name = other_temp.name
+    selected_before = {obj.name for obj in bpy.context.selected_objects}
+    active_before = bpy.context.view_layer.objects.active
+    mode_before = active_before.mode
+    frame_before = bpy.context.scene.frame_current
     try:
         baked = action_baker.bake_action(rig, result.frame_start, result.frame_end)
     except errors.MocapError as exc:
@@ -275,6 +291,14 @@ def main() -> None:
         return
 
     summary = action_baker.action_summary(baked)
+    harness.check(rig.pose.bones['upper_arm_fk.L'].constraints.get('UserKeepConstraint') is not None, 'baking preserves user constraints')
+    harness.check(rig.pose.bones['upper_arm_fk.L'].constraints.get(temp_data.temp_name('bake_test')) is None, 'baking removes only target temporary constraints')
+    harness.check(other.pose.bones[0].constraints.get(other_temp_name) is not None, 'baking preserves other rig temporary constraints')
+    harness.check((other.animation_data.action if other.animation_data else None) is other_action, 'baking leaves other selected armature animation untouched')
+    harness.check_equal({obj.name for obj in bpy.context.selected_objects}, selected_before, 'baking restores selection')
+    harness.check(bpy.context.view_layer.objects.active is active_before, 'baking restores active object')
+    harness.check_equal(active_before.mode, mode_before, 'baking restores mode')
+    harness.check_equal(bpy.context.scene.frame_current, frame_before, 'baking restores frame')
     harness.check(summary["fcurves"] > 0, "baked action has curves ({0})".format(summary["fcurves"]))
     harness.check(summary["keyframes"] > 0, "baked action has keyframes ({0})".format(summary["keyframes"]))
     harness.check(bool(baked.get("mocap_baked")), "baked action is tagged")
@@ -315,6 +339,17 @@ def main() -> None:
         for fc in vertical
     )
     harness.check(moves, "in_place keeps vertical bob")
+
+    harness.section("repeat mirrored retarget")
+    original_body = dict(result.frames[0].body3d)
+    mirrored_options = rigify_adapter.RetargetOptions(flip_x=True, include_hands=False, action_name='MirrorRegression')
+    def key_values(action):
+        return {(fc.data_path, fc.array_index): tuple(round(float(kp.co[1]), 5) for kp in fc.keyframe_points)
+                for fc in action.fcurves}
+    first_mirror = key_values(rigify_adapter.retarget_to_rigify(result, rig, mirrored_options))
+    second_mirror = key_values(rigify_adapter.retarget_to_rigify(result, rig, mirrored_options))
+    harness.check(result.frames[0].body3d == original_body, 'mirrored retarget preserves cached source')
+    harness.check(first_mirror == second_mirror, 'repeated mirrored application is stable')
 
     harness.section("teardown")
     try:

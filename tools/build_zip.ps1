@@ -38,7 +38,7 @@ if (-not $OutputDir) { $OutputDir = Join-Path $repoRoot 'dist' }
 $zipPath = Join-Path $OutputDir ("{0}-{1}.zip" -f $packageName, $version)
 
 # Directory names that are never packaged.
-$excludedDirs = @('.git', '.venv', '.idea', '.agents', '__pycache__', 'dist', '.mocap_jobs', '.pytest_cache')
+$excludedDirs = @('.git', '.venv', '.venv-preview', 'venv', '.cache', '.downloads', '_sources', '.idea', '.vscode', '.agents', '.codex', '__pycache__', 'dist', '.mocap_jobs', '.pytest_cache')
 # File patterns that are never packaged (model weights must stay out).
 $excludedFilePatterns = @('*.pth', '*.task', '*.onnx', '*.pt', '*.ckpt', '*.zip', '*.log', '*.blend1', '*.mp4', '*.mov', '*.avi', '*.mkv')
 
@@ -54,6 +54,8 @@ $skippedWeights = 0
 Get-ChildItem -Path $repoRoot -Recurse -File -Force | ForEach-Object {
     $relative = $_.FullName.Substring($repoRoot.Length).TrimStart('\', '/')
     $parts = $relative -split '[\\/]'
+    if ($relative -eq 'models\manifest.json' -or $relative -eq 'models/manifest.json') { return }
+    if ($parts[0] -eq 'models' -and $_.Extension -eq '.py') { return }
 
     foreach ($part in $parts) {
         if ($excludedDirs -contains $part) { return }
@@ -105,7 +107,11 @@ try {
 }
 finally { $archive.Dispose() }
 
-Remove-Item -Recurse -Force $staging
+$resolvedStaging = [System.IO.Path]::GetFullPath($staging)
+$resolvedTemp = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\') + '\'
+if (-not $resolvedStaging.StartsWith($resolvedTemp, [System.StringComparison]::OrdinalIgnoreCase) -or
+    (Split-Path -Leaf $resolvedStaging) -notlike 'mocap_pkg_*') { throw 'Unsafe staging cleanup path.' }
+Remove-Item -LiteralPath $resolvedStaging -Recurse -Force
 
 # Verify the archive really uses forward slashes and has a single root folder.
 $verify = [System.IO.Compression.ZipFile]::OpenRead($zipPath)

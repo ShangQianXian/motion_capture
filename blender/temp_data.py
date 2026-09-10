@@ -81,15 +81,21 @@ def remove_constraints(armature_object=None) -> int:
     return removed
 
 
-def _sweep_marked_constraints() -> int:
+def _sweep_marked_constraints(armature_object=None) -> int:
     """Remove any prefixed/marked constraint, even from a previous session."""
     removed = 0
     for obj in bpy.data.objects:
+        if armature_object is not None and obj is not armature_object:
+            continue
         if obj.type != "ARMATURE" or obj.pose is None:
             continue
         for pose_bone in obj.pose.bones:
             for constraint in list(pose_bone.constraints):
-                if constraint.name.startswith(TEMP_PREFIX) or constraint.get(TEMP_MARKER):
+                try:
+                    marked = bool(constraint.get(TEMP_MARKER))
+                except TypeError:
+                    marked = False
+                if constraint.name.startswith(TEMP_PREFIX) or marked:
                     pose_bone.constraints.remove(constraint)
                     removed += 1
     return removed

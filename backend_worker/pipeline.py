@@ -61,17 +61,22 @@ def module_report() -> dict:
     return report
 
 
-def check_env() -> dict:
+def check_env(profile=None) -> dict:
     """Payload for ``--check-env``."""
-    return {
+    report = {
         "python": sys.version.split()[0],
         "python_executable": sys.executable or "",
         "platform": platform.platform(),
         "addon_root": paths.addon_root(),
-        "modules": module_report(),
         "skeleton": skeleton.SKELETON_ID,
         "result_version": result_schema.RESULT_VERSION,
     }
+    if profile:
+        from .environment import validate_environment
+        report.update(validate_environment(profile))
+    else:
+        report["modules"] = module_report()
+    return report
 
 
 def check_cuda() -> dict:
@@ -103,6 +108,26 @@ def check_cuda() -> dict:
             errors.CUDA_UNAVAILABLE,
             "PyTorch 已安装但 CUDA 不可用。",
             suggestion="确认安装的是 CUDA 版 PyTorch 且显卡驱动正常；或改用 preview / fallback_cpu profile。",
+        ).to_dict()
+        return payload
+
+    try:
+        # An availability flag alone does not exercise driver / binary compatibility.
+        sample = torch.eye(2, device="cuda:0")
+        if not torch.equal(sample @ sample, sample):
+            raise RuntimeError("CUDA matrix multiplication returned incorrect values")
+        from torchvision.ops import nms as tv_nms
+        from mmcv.ops import nms as mmcv_nms
+        boxes = torch.tensor([[0., 0., 2., 2.], [0., 0., 2., 2.]], device="cuda:0")
+        scores = torch.tensor([0.9, 0.8], device="cuda:0")
+        if tv_nms(boxes, scores, 0.5).tolist() != [0] or mmcv_nms(boxes, scores, 0.5)[1].tolist() != [0]:
+            raise RuntimeError("CUDA NMS returned incorrect indices")
+        torch.cuda.synchronize()
+        payload["operations"] = ["torch.matmul", "torchvision.nms", "mmcv.nms"]
+    except Exception as exc:
+        payload["available"] = False
+        payload["error"] = errors.MocapError(
+            errors.CUDA_UNAVAILABLE, "CUDA 算子测试失败：{0}".format(exc)
         ).to_dict()
         return payload
 
@@ -157,12 +182,17 @@ def run_job(job: dict, reporter, cancel_token=None, mock: bool = False) -> str:
     if report.missing_required:
         raise model_manifest.first_missing_error(report)
 
+    from .environment import validate_environment
+    environment = validate_environment(profile)
+    if not environment["ok"]:
+        raise errors.MocapError.from_dict(environment["error"])
+
     if profile in MEDIAPIPE_PROFILES:
         frames, fps, warnings = _run_mediapipe(
             job, profile, manifest, reporter, cancel_token, options
         )
     elif profile in MMPOSE_PROFILES:
-        frames, fps, warnings = _run_mmpose(
+        frames, fps, warnings, profile = _run_mmpose(
             job, profile, manifest, reporter, cancel_token, options
         )
     else:
@@ -260,6 +290,10 @@ def _run_self_test(job: dict, reporter) -> str:
     if report.missing_required:
         raise model_manifest.first_missing_error(report)
     effective = report.effective_profile
+    from .environment import validate_environment
+    environment = validate_environment(effective)
+    if not environment["ok"]:
+        raise errors.MocapError.from_dict(environment["error"])
     if effective != profile:
         reporter.warning(
             CODE_PROFILE_FALLBACK,
@@ -479,6 +513,7 @@ def _run_mmpose(job, profile, manifest, reporter, cancel_token, options) -> tupl
     frame_start = int(input_section.get("frame_start") or 1)
     keypoints_seq = []
     scores_seq = []
+    bboxes_seq = []
     frame_meta = []
     image_size = None
 
@@ -489,6 +524,9 @@ def _run_mmpose(job, profile, manifest, reporter, cancel_token, options) -> tupl
                 image_size = (decoded.width, decoded.height)
             bbox = detector.detect(decoded.image)
             if bbox is None:
+                keypoints_seq.append(None)
+                scores_seq.append(None)
+                bboxes_seq.append(None)
                 reporter.warning(
                     errors.NO_PERSON_DETECTED,
                     "第 {0} 帧未检测到人体。".format(frame_start + decoded.index),
@@ -497,6 +535,9 @@ def _run_mmpose(job, profile, manifest, reporter, cancel_token, options) -> tupl
                 continue
             keypoints, keypoint_scores = body2d.estimate(decoded.image, bbox)
             if keypoints is None:
+                keypoints_seq.append(None)
+                scores_seq.append(None)
+                bboxes_seq.append(None)
                 reporter.warning(
                     errors.NO_PERSON_DETECTED,
                     "第 {0} 帧 2D 姿态估计为空。".format(frame_start + decoded.index),
@@ -506,27 +547,29 @@ def _run_mmpose(job, profile, manifest, reporter, cancel_token, options) -> tupl
             h36m_points, h36m_scores = pose2d_mmpose.coco17_to_h36m17(keypoints, keypoint_scores)
             keypoints_seq.append(h36m_points)
             scores_seq.append(h36m_scores)
+            bboxes_seq.append(bbox)
             frame_meta.append((frame_start + decoded.index, decoded.timestamp))
             if source.total_frames:
                 reporter.processing_frame(frame_start + decoded.index, source.total_frames)
     finally:
         source.close()
 
-    if not keypoints_seq:
-        return [], source.fps, warnings
+    if not frame_meta:
+        return [], source.fps, warnings, profile
 
     _raise_if_cancelled(cancel_token)
     reporter.loading_model(profile=profile, model_id=pose3d_motionbert.LIFTER_WEIGHTS, fraction=0.7)
     lifter = pose3d_motionbert.Body3DLifter(models_root, device, manifest, reporter)
-    lifted = lifter.lift(keypoints_seq, scores_seq, image_size)
+    lifted = lifter.lift(keypoints_seq, scores_seq, image_size, bboxes_seq, cancel_token)
+    valid_scores = [score for score in scores_seq if score is not None]
+    if len(lifted) != len(frame_meta):
+        raise errors.MocapError(errors.INTERNAL_ERROR, "MotionBERT 输出帧数与有效输入帧数不一致。")
 
     scale = pose3d_motionbert.estimate_metric_scale(lifted[0]) if len(lifted) else 1.0
     frames = []
     for index, (frame_number, timestamp) in enumerate(frame_meta):
-        if index >= len(lifted):
-            break
         body, confidence = pose3d_motionbert.h36m_to_standard(
-            lifted[index], scores_seq[index], scale
+            lifted[index], valid_scores[index], scale
         )
         body = pose3d_motionbert.ground_and_stand(body)
         frames.append(
@@ -549,4 +592,4 @@ def _run_mmpose(job, profile, manifest, reporter, cancel_token, options) -> tupl
         )
         reporter.warning(warnings[-1]["code"], warnings[-1]["message"])
 
-    return frames, source.fps, warnings
+    return frames, source.fps, warnings, profile

@@ -129,33 +129,9 @@ D:/blender_addons/motion_capture/models
 
 ### 3.2 外部 Python 环境安装
 
-不要把 PyTorch、MMPose、MMCV、MMDetection 安装进 Blender 内置 Python。推荐创建独立的 worker 虚拟环境：
+当前使用 Python 3.10.0 x64 双 worker 环境：Quality / Quality Plus 位于 `.venv`，Preview / CPU fallback 位于 `.venv-preview`，插件自动选择。开发与验收目标为 Blender 4.5.0。
 
-```powershell
-cd D:\blender_addons\motion_capture
-py -3.12 -m venv .venv
-.\.venv\Scripts\python -m pip install --upgrade pip
-```
-
-安装 PyTorch 时，以 PyTorch 官网当前选择器为准，选择 Windows、Pip、CUDA 12.x。RTX4060 推荐优先使用 CUDA 12.x wheel。示例：
-
-```powershell
-.\.venv\Scripts\python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
-```
-
-然后安装推理依赖。安装顺序必须是先 PyTorch，再 MMCV/MMDetection/MMPose：
-
-```powershell
-.\.venv\Scripts\python -m pip install -U openmim
-.\.venv\Scripts\python -m mim install "mmengine" "mmcv" "mmdet" "mmpose"
-.\.venv\Scripts\python -m pip install opencv-python mediapipe numpy scipy tqdm
-```
-
-安装完成后，用户可用以下命令检查 CUDA：
-
-```powershell
-.\.venv\Scripts\python -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU only')"
-```
+安装入口为 `tools/bootstrap_worker_env.ps1`，精确依赖从 `requirements/*.in` 与对应 `.txt` 锁定文件维护。完整命令、代理处理、CUDA 运行库说明和环境检查见 [INSTALL.md](INSTALL.md#3-创建-python-3100-双环境)。禁止通过安装最新版依赖替代锁定组合。Blender 内置 Python 与外部 worker 分离。
 
 ### 3.3 模型下载清单
 

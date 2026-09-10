@@ -18,6 +18,7 @@ Contract:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import sys
 
@@ -26,6 +27,8 @@ import sys
 _ADDON_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ADDON_ROOT not in sys.path:
     sys.path.insert(0, _ADDON_ROOT)
+if not __package__:
+    __package__ = "backend_worker"
 
 from ._core import errors, job_schema  # noqa: E402  (path bootstrap must run first)
 
@@ -44,6 +47,8 @@ def build_parser() -> argparse.ArgumentParser:
         description="Motion Capture for Rigify - external inference worker.",
     )
     parser.add_argument("--job", metavar="PATH", help="path to a job JSON file")
+    parser.add_argument("--profile", choices=("preview", "fallback_cpu", "quality", "quality_plus"),
+                        help="validate required dependencies for this profile with --check-env")
     parser.add_argument(
         "--mock",
         action="store_true",
@@ -87,7 +92,8 @@ def main(argv=None) -> int:
                 (job.get("model") or {}).get("profile"), bool(args.mock)
             )
         )
-        result_path = pipeline.run_job(job, reporter, cancel_token, mock=bool(args.mock))
+        with contextlib.redirect_stdout(sys.stderr):
+            result_path = pipeline.run_job(job, reporter, cancel_token, mock=bool(args.mock))
         reporter.completed(result_path)
         return EXIT_OK
     except KeyboardInterrupt:
@@ -113,11 +119,17 @@ def _run_probe(args) -> int:
     try:
         if args.check_env:
             reporter.emit("started", message="check-env")
-            report = pipeline.check_env()
-            reporter.emit("completed", progress=1.0, check="env", report=report)
+            with contextlib.redirect_stdout(sys.stderr):
+                report = pipeline.check_env(profile=args.profile)
+            if report.get("ok", True):
+                reporter.emit("completed", progress=1.0, check="env", report=report)
+            else:
+                reporter.emit("failed", check="env", report=report, error=report["error"])
+                return EXIT_FAILED
         if args.check_cuda:
             reporter.emit("started", message="check-cuda")
-            report = pipeline.check_cuda()
+            with contextlib.redirect_stdout(sys.stderr):
+                report = pipeline.check_cuda()
             if report.get("available"):
                 reporter.emit("completed", progress=1.0, check="cuda", report=report)
             else:

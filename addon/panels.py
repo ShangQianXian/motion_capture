@@ -43,7 +43,7 @@ class MOCAP_PT_environment(_MocapPanel):
             return
 
         models_root = prefs.resolved_models_root()
-        worker_python = prefs.resolved_worker_python()
+        worker_python = prefs.resolved_worker_python(props.capture_profile)
 
         column = layout.column(align=True)
         column.label(
@@ -183,7 +183,7 @@ class MOCAP_PT_capture(_MocapPanel):
 
 def _capture_blocked(props, prefs) -> tuple:
     """``(blocked, reason)`` for the Run Capture button (guide section 11.3)."""
-    if not prefs.resolved_worker_python():
+    if not prefs.resolved_worker_python(props.capture_profile):
         return True, ui_text.MSG_NO_WORKER_PYTHON
     if not props.source_media:
         return True, "请先选择源文件。"
@@ -229,6 +229,10 @@ class MOCAP_PT_rigify(_MocapPanel):
         box.label(text="重定向选项", icon="CON_ROTLIKE")
         box.prop(props, "switch_limbs_to_fk")
         box.prop(props, "flip_x")
+        box.prop(props, "pitch_correction")
+        row = box.row()
+        row.enabled = operators.loaded_result() is not None
+        row.operator("mocap.calibrate_pitch", icon="ORIENTATION_GLOBAL")
         box.prop(props, "frame_step")
 
         has_result = bool(props.last_result_path)

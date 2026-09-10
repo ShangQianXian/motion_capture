@@ -122,15 +122,16 @@ class TestBuildJob(TempDirCase):
                 self._prefs(),
             )
 
-    def test_device_is_cpu_only_for_fallback_profile(self):
+    def test_device_matches_profile_backend(self):
         job = job_schema.build_job(
             scene_props(source_media=self._media(), capture_profile="quality"), self._prefs()
         )
         self.assertEqual(job["model"]["device"], "cuda:0")
-        job = job_schema.build_job(
-            scene_props(source_media=self._media(), capture_profile="fallback_cpu"), self._prefs()
-        )
-        self.assertEqual(job["model"]["device"], "cpu")
+        for profile in ("preview", "fallback_cpu"):
+            job = job_schema.build_job(
+                scene_props(source_media=self._media(), capture_profile=profile), self._prefs()
+            )
+            self.assertEqual(job["model"]["device"], "cpu")
 
     def test_strengths_are_clamped(self):
         job = job_schema.build_job(

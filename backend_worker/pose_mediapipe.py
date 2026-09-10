@@ -40,7 +40,7 @@ def _require_mediapipe():
         raise errors.MocapError(
             errors.DEPENDENCY_MISSING,
             "worker 环境缺少 mediapipe：{0}".format(exc),
-            suggestion="在 worker 虚拟环境中执行 pip install mediapipe（见 docs/INSTALL.md）。",
+            suggestion="按 docs/INSTALL.md 运行 tools/bootstrap_worker_env.ps1 -Environment preview。",
             details={"module": "mediapipe"},
         )
     return mediapipe
@@ -73,7 +73,7 @@ class MediaPipeBodyEstimator(object):
             raise errors.MocapError(
                 errors.DEPENDENCY_MISSING,
                 "mediapipe 版本过旧，缺少 tasks API：{0}".format(exc),
-                suggestion="升级 mediapipe：pip install -U mediapipe。",
+                suggestion="按 docs/INSTALL.md 重新安装锁定的 preview 环境。",
                 details={"module": "mediapipe.tasks"},
             )
         self._mp = mediapipe

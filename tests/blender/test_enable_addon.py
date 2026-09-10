@@ -34,6 +34,7 @@ OPERATOR_CLASSES = (
     "MOCAP_OT_run_capture",
     "MOCAP_OT_cancel_capture",
     "MOCAP_OT_import_result",
+    "MOCAP_OT_calibrate_pitch",
     "MOCAP_OT_apply_to_rigify",
     "MOCAP_OT_bake_action",
     "MOCAP_OT_clear_temp_data",
@@ -62,7 +63,7 @@ def main() -> None:
     harness.section("bl_info")
     info = getattr(module, "bl_info", {})
     harness.check_equal(info.get("version"), (0, 1, 0), "bl_info version")
-    harness.check_equal(info.get("blender"), (4, 0, 0), "bl_info minimum Blender")
+    harness.check_equal(info.get("blender"), (4, 5, 0), "bl_info minimum Blender")
     harness.check_equal(info.get("category"), "Animation", "bl_info category")
 
     harness.section("registration")
@@ -98,6 +99,10 @@ def main() -> None:
     prefs = prefs_module.get_preferences()
     harness.check(prefs is not None, "preferences instance reachable")
     if prefs is not None:
+        prefs.worker_python = sys.executable
+        prefs.preview_worker_python = os.path.join(harness.addon_root(), '.venv-preview', 'Scripts', 'python.exe')
+        harness.check_equal(prefs.resolved_worker_python('quality_plus'), sys.executable, "Quality uses original worker path")
+        harness.check_equal(prefs.resolved_worker_python('fallback_cpu'), prefs.preview_worker_python, "CPU fallback uses Preview worker")
         harness.check_almost_equal(prefs.max_vram_gb, 7.0, "default max_vram_gb")
         harness.check_equal(prefs.allow_auto_download, False, "auto download off by default")
         harness.check_equal(prefs.default_profile, "quality", "default profile is quality")

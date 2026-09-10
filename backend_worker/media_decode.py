@@ -25,7 +25,7 @@ def _require_cv2():
         raise errors.MocapError(
             errors.DEPENDENCY_MISSING,
             "worker 环境缺少 opencv-python：{0}".format(exc),
-            suggestion="在 worker 虚拟环境中执行 pip install opencv-python（见 docs/INSTALL.md）。",
+            suggestion="按 docs/INSTALL.md 安装对应 profile 的锁定环境；每个环境只保留一种 OpenCV 包。",
             details={"module": "cv2"},
         )
     return cv2

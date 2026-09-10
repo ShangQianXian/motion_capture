@@ -238,11 +238,16 @@ class MOCAP_OT_test_worker_python(bpy.types.Operator):
         if prefs is None:
             return {"CANCELLED"}
         try:
-            report = worker_client.check_env(prefs.resolved_worker_python())
+            profile = props.capture_profile if props is not None else prefs.default_profile
+            report = worker_client.check_env(prefs.resolved_worker_python(profile), profile=profile)
         except errors.MocapError as exc:
             return _fail(self, props, exc)
 
         payload = report.get("report") or {}
+        if report.get("event") == "failed" or report.get("returncode", 0) != 0 or not payload.get("ok", True):
+            return _fail(self, props, errors.MocapError.from_dict(report.get("error") or payload.get("error") or {
+                "code": errors.DEPENDENCY_MISSING, "message": "Worker 环境检查失败。"
+            }))
         modules = payload.get("modules") or {}
         available = sorted(name for name, info in modules.items() if info.get("available"))
         missing = sorted(name for name, info in modules.items() if not info.get("available"))
@@ -319,9 +324,10 @@ class _SelfTestBase(bpy.types.Operator):
             props.capture_profile = original
 
         try:
+            effective = model_manifest.check_profile_requirements(self.profile, prefs.resolved_models_root()).effective_profile
             job_path = job_schema.write_job(job)
             result_path, events = worker_client.run_blocking(
-                prefs.resolved_worker_python(),
+                prefs.resolved_worker_python(effective),
                 job_path,
                 output_dir=job["output"]["dir"],
                 on_event=lambda event: _log_event(props, event),
@@ -361,6 +367,9 @@ def _log_event(props, event) -> None:
     """Mirror a worker progress event into the scene log and progress fields."""
     if props is None:
         return
+    effective = event.fields.get("profile")
+    if effective in model_manifest.CAPTURE_PROFILES:
+        props.effective_profile = effective
     if event.event == progress_mod.EVENT_PROCESSING_FRAME:
         fraction = event.progress
         if fraction is not None:
@@ -438,7 +447,7 @@ class MOCAP_OT_run_capture(bpy.types.Operator):
         extra_args = ["--mock"] if self.mock else []
         try:
             worker = worker_client.run_worker(
-                prefs.resolved_worker_python(),
+                prefs.resolved_worker_python(props.capture_profile if self.mock else report.effective_profile),
                 job_path,
                 output_dir=job["output"]["dir"],
                 extra_args=extra_args,
@@ -609,6 +618,8 @@ class MOCAP_OT_import_result(bpy.types.Operator):
         except errors.MocapError as exc:
             return _fail(self, props, exc)
 
+        if _loaded_result.get("path") != result.path:
+            props.pitch_correction = 0.0
         _loaded_result["result"] = result
         _loaded_result["path"] = result.path
         props.last_result_path = result.path
@@ -623,6 +634,35 @@ class MOCAP_OT_import_result(bpy.types.Operator):
             props,
             ui_text.MSG_RESULT_IMPORTED.format(len(result.frames), result.fps, result.profile),
         )
+        _tag_redraw()
+        return {"FINISHED"}
+
+
+class MOCAP_OT_calibrate_pitch(bpy.types.Operator):
+    """Estimate a constant orientation correction for an upright capture."""
+
+    bl_idname = "mocap.calibrate_pitch"
+    bl_label = ui_text.OP_CALIBRATE_PITCH
+    bl_description = ui_text.OP_CALIBRATE_PITCH_DESC
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        import math
+        from ..core import pose_calibration
+
+        props = properties.get_props(context)
+        if props is None:
+            return {"CANCELLED"}
+        result = _loaded_result.get("result")
+        if result is None:
+            return _fail(self, props, errors.MocapError(
+                errors.RESULT_SCHEMA_INVALID, "请先点击“导入结果”。"))
+        try:
+            props.pitch_correction = pose_calibration.estimate_standing_pitch(result)
+        except errors.MocapError as exc:
+            return _fail(self, props, exc)
+        _info(self, props, "已设置 X 轴倾斜校正 {0:.1f}°，点击“应用到 Rigify”生效。".format(
+            math.degrees(props.pitch_correction)))
         _tag_redraw()
         return {"FINISHED"}
 
@@ -665,6 +705,7 @@ class MOCAP_OT_apply_to_rigify(bpy.types.Operator):
             switch_limbs_to_fk=props.switch_limbs_to_fk,
             flip_x=props.flip_x,
             frame_step=props.frame_step,
+            pitch_correction=props.pitch_correction,
             progress=report_progress,
         )
         try:
@@ -763,6 +804,7 @@ classes = (
     MOCAP_OT_run_capture,
     MOCAP_OT_cancel_capture,
     MOCAP_OT_import_result,
+    MOCAP_OT_calibrate_pitch,
     MOCAP_OT_apply_to_rigify,
     MOCAP_OT_bake_action,
     MOCAP_OT_clear_temp_data,

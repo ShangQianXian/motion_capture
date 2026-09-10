@@ -9,12 +9,12 @@
 
 .EXAMPLE
     .\tools\dev_install.ps1
-    .\tools\dev_install.ps1 -BlenderVersion 4.0
+    .\tools\dev_install.ps1 -BlenderVersion 4.5
     .\tools\dev_install.ps1 -Remove
 #>
 [CmdletBinding()]
 param(
-    [string[]] $BlenderVersion = @('4.0', '4.5'),
+    [string[]] $BlenderVersion = @('4.5'),
     [switch] $Remove
 )
 

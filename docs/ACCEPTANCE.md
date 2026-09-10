@@ -1,5 +1,7 @@
 # 验收清单
 
+> 当前实现目标：Blender 4.5.0，Python 3.10.0 双 worker 环境。依赖版本、安装与诊断以 [INSTALL.md](INSTALL.md) 和 `requirements/` 为准；下文早期 4.0 兼容记录仅作历史参考。
+
 对应 `docs/DEVELOPMENT_GUIDE.md` §12 与 `docs/TECHNICAL_DESIGN.md` §10。
 
 自动化部分（A 节）在本机已全部通过；手工部分（B/C 节）需要真实模型与素材。
@@ -32,7 +34,7 @@ python -m pytest tests/unit          # pytest 已安装时同样可用
 | 标准骨架与映射表 | `test_skeleton.py` |
 | 错误对象与路径工具 | `test_errors_paths.py` |
 
-结果：**292 个用例通过**。
+结果：**326 个用例通过**。新增解释器误配、环境路由、CLI 失败退出、非有限 FPS 和降级 profile 回归，另含 23 项模型下载器测试。
 
 ### A.2 Blender 后台测试
 
@@ -56,7 +58,7 @@ blender --background --factory-startup --python tests\blender\test_mock_retarget
 | 无左右反转 | 通过（`.L` 骨骼世界 X 为正） |
 | in-place 模式去掉水平位移、保留起伏 | 通过 |
 
-已验证版本：**Blender 4.0.2（Python 3.10.13）** 与 **Blender 4.5.0（Python 3.11.11）**。
+本次已验证：**Blender 4.5.0（Python 3.11.11）**，48 + 63 项检查通过，包括用户约束保留、其他 rig 不受影响和连续镜像应用。4.0.2 为早期测试记录，不在本次支持范围内。
 
 ### A.3 Worker CLI 契约
 

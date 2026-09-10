@@ -106,8 +106,8 @@ def bake_action(
 ) -> bpy.types.Action:
     """Bake visual transforms into an editable Blender Action.
 
-    Clears the temporary constraints and objects the retarget stage may have
-    created, then returns the Action still assigned to ``armature``.
+    Clears this rig's temporary constraints, then returns its assigned Action.
+    Other rigs and shared temporary objects are left for explicit cleanup.
     """
     if armature is None or getattr(armature, "type", None) != "ARMATURE":
         raise errors.MocapError(
@@ -128,17 +128,20 @@ def bake_action(
 
     view_layer = bpy.context.view_layer
     previous_active = view_layer.objects.active
-    previous_mode = armature.mode
-    try:
-        armature.hide_set(False)
-    except (AttributeError, RuntimeError):  # pragma: no cover
-        pass
-    armature.select_set(True)
-    view_layer.objects.active = armature
-    if armature.mode != "POSE":
-        bpy.ops.object.mode_set(mode="POSE")
+    previous_mode = previous_active.mode if previous_active is not None else "OBJECT"
+    selection = [(obj, obj.select_get()) for obj in view_layer.objects]
+    was_hidden = armature.hide_get()
+    previous_frame = bpy.context.scene.frame_current
 
     try:
+        if previous_active is not None and previous_active.mode != "OBJECT":
+            bpy.ops.object.mode_set(mode="OBJECT")
+        for obj, _ in selection:
+            obj.select_set(False)
+        armature.hide_set(False)
+        armature.select_set(True)
+        view_layer.objects.active = armature
+        bpy.ops.object.mode_set(mode="POSE")
         with BoneSelectionState(armature) as state:
             state.reveal(bones)
             try:
@@ -148,7 +151,7 @@ def bake_action(
                     step=max(1, int(step)),
                     only_selected=bool(only_mapped),
                     visual_keying=True,
-                    clear_constraints=True,
+                    clear_constraints=False,
                     clear_parents=False,
                     use_current_action=True,
                     clean_curves=bool(clean_curves),
@@ -161,18 +164,18 @@ def bake_action(
                     details={"object": armature.name, "frame_start": start, "frame_end": end},
                 )
     finally:
-        if previous_mode and armature.mode != previous_mode:
-            try:
-                bpy.ops.object.mode_set(mode=previous_mode)
-            except RuntimeError:  # pragma: no cover
-                pass
-        if previous_active is not None:
-            try:
-                view_layer.objects.active = previous_active
-            except (AttributeError, RuntimeError):  # pragma: no cover
-                pass
+        if view_layer.objects.active is not None and view_layer.objects.active.mode != "OBJECT":
+            bpy.ops.object.mode_set(mode="OBJECT")
+        for obj, selected in selection:
+            obj.select_set(selected)
+        armature.hide_set(was_hidden)
+        view_layer.objects.active = previous_active
+        if previous_active is not None and previous_mode != "OBJECT":
+            bpy.ops.object.mode_set(mode=previous_mode)
+        bpy.context.scene.frame_set(previous_frame)
 
-    temp_data.cleanup_all()
+    temp_data.remove_constraints(armature)
+    temp_data._sweep_marked_constraints(armature)
 
     baked = armature.animation_data.action
     baked.use_fake_user = True

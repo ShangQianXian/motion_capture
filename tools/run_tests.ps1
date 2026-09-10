@@ -13,24 +13,31 @@
 #>
 [CmdletBinding()]
 param(
-    [string] $Python = 'python',
+    [string] $Python,
     [string[]] $Blender = @(),
-    [switch] $SkipBlender
+    [switch] $SkipBlender,
+    [switch] $SkipWorker
 )
 
 # Native tools write progress to stderr; that must not abort the run.
 $ErrorActionPreference = 'Continue'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
+if (-not $Python) {
+    $Python = Join-Path $repoRoot '.venv\Scripts\python.exe'
+    if (-not (Test-Path -LiteralPath $Python)) { $Python = 'E:\SoftWare\Python\Python3.10.0\python.exe' }
+    if (-not (Test-Path -LiteralPath $Python)) { throw 'Pass -Python with a Python 3.10.0 executable.' }
+}
 $failures = New-Object System.Collections.Generic.List[string]
 
 function Invoke-Step {
     param([string] $Name, [scriptblock] $Body)
     Write-Host ''
     Write-Host "=== $Name ===" -ForegroundColor Cyan
-    & $Body
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "FAILED: $Name (exit $LASTEXITCODE)" -ForegroundColor Red
+    try { & $Body; $stepExit = $LASTEXITCODE }
+    catch { Write-Host $_ -ForegroundColor Red; $stepExit = 1 }
+    if ($stepExit -ne 0) {
+        Write-Host "FAILED: $Name (exit $stepExit)" -ForegroundColor Red
         $script:failures.Add($Name)
     }
     else {
@@ -92,6 +99,7 @@ if (-not $SkipBlender) {
         foreach ($base in @('C:\Program Files\Blender Foundation', 'E:\SoftWare\Blender', 'D:\SoftWare\Blender')) {
             if (Test-Path $base) {
                 Get-ChildItem -Path $base -Filter 'blender.exe' -Recurse -Depth 3 -ErrorAction SilentlyContinue |
+                    Where-Object { $_.FullName -match '4\.5' } |
                     ForEach-Object { $candidates.Add($_.FullName) }
             }
         }
@@ -104,14 +112,45 @@ if (-not $SkipBlender) {
     }
 
     foreach ($exe in $found) {
-        foreach ($test in @('test_enable_addon.py', 'test_mock_retarget.py')) {
+        foreach ($test in @('test_enable_addon.py', 'test_mock_retarget.py', 'test_retarget_coordinates.py')) {
             Invoke-Step "blender $test ($exe)" {
                 Push-Location $repoRoot
                 try {
-                    & $exe --background --factory-startup --python "tests\blender\$test" 2>&1 |
+                    & $exe --background --factory-startup --python-exit-code 1 --python "tests\blender\$test" 2>&1 |
                         Select-String -Pattern 'Blender \d.*Python|checks, \d+ failures|RESULT|FAILED:|FATAL' |
                         Out-Host
                 }
+                finally { Pop-Location }
+            }
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------------------
+# Worker integration tests (no trained models required)
+# ---------------------------------------------------------------------------------------
+if (-not $SkipWorker) {
+    foreach ($kind in @('quality', 'preview')) {
+        $folder = if ($kind -eq 'quality') { '.venv' } else { '.venv-preview' }
+        $workerPython = Join-Path $repoRoot "$folder\Scripts\python.exe"
+        if (-not (Test-Path -LiteralPath $workerPython)) {
+            Write-Host "skipped: $kind worker is not installed" -ForegroundColor Yellow
+            continue
+        }
+        Invoke-Step "$kind adapter contracts" {
+            Push-Location $repoRoot
+            try { & $workerPython -m unittest discover -s tests/worker -t . 2>&1 | ForEach-Object { $_.ToString() } | Out-Host }
+            finally { Pop-Location }
+        }
+        Invoke-Step "$kind environment" {
+            Push-Location $repoRoot
+            try { & $workerPython -m backend_worker.cli --check-env --profile $kind 2>&1 | ForEach-Object { $_.ToString() } | Out-Host }
+            finally { Pop-Location }
+        }
+        if ($kind -eq 'quality') {
+            Invoke-Step 'CUDA operators' {
+                Push-Location $repoRoot
+                try { & $workerPython -m backend_worker.cli --check-cuda 2>&1 | ForEach-Object { $_.ToString() } | Out-Host }
                 finally { Pop-Location }
             }
         }

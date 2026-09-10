@@ -9,7 +9,7 @@ PEP 563 breaks ``register_class`` for property definitions.
 import bpy
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, StringProperty
 
-from ..core import model_manifest, paths
+from ..core import model_manifest, paths, worker_environment
 from . import ui_text
 
 #: Package name used to look the preferences up: this module's parent package.
@@ -32,6 +32,12 @@ class MotionCapturePreferences(bpy.types.AddonPreferences):
     worker_python: StringProperty(
         name=ui_text.PREF_WORKER_PYTHON,
         description=ui_text.PREF_WORKER_PYTHON_DESC,
+        subtype="FILE_PATH",
+        default="",
+    )
+    preview_worker_python: StringProperty(
+        name="Preview Worker Python",
+        description="Preview / CPU fallback 解释器；留空时自动查找 .venv-preview，再兼容旧 Worker Python 配置",
         subtype="FILE_PATH",
         default="",
     )
@@ -62,9 +68,11 @@ class MotionCapturePreferences(bpy.types.AddonPreferences):
 
     # -- resolved paths ------------------------------------------------------------------
 
-    def resolved_worker_python(self) -> str:
+    def resolved_worker_python(self, profile="quality") -> str:
         """Absolute worker interpreter path (``//relative`` expanded)."""
-        return paths.normalize(bpy.path.abspath(self.worker_python)) if self.worker_python else ""
+        quality = bpy.path.abspath(self.worker_python) if self.worker_python else ""
+        preview = bpy.path.abspath(self.preview_worker_python) if self.preview_worker_python else ""
+        return worker_environment.select_python(quality, preview, profile)
 
     def resolved_models_root(self) -> str:
         """Absolute models root path (``//relative`` expanded)."""
@@ -78,6 +86,7 @@ class MotionCapturePreferences(bpy.types.AddonPreferences):
         box = layout.box()
         box.label(text=ui_text.PREF_PATHS_HEADER, icon="FILE_FOLDER")
         box.prop(self, "worker_python")
+        box.prop(self, "preview_worker_python")
         box.prop(self, "models_root")
         row = box.row(align=True)
         row.prop(self, "max_vram_gb")

@@ -54,6 +54,10 @@ def _popen_kwargs() -> dict:
     if os.name == "nt":
         kwargs["creationflags"] = _CREATE_NO_WINDOW
     env = dict(os.environ)
+    for key in list(env):
+        if key.upper() in ("PYTHONHOME", "PYTHONPATH"):
+            del env[key]
+    env["PYTHONNOUSERSITE"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUNBUFFERED"] = "1"
     kwargs["env"] = env
@@ -391,9 +395,12 @@ def probe(worker_python: str, args, timeout: float = 60.0) -> dict:
     return payload
 
 
-def check_env(worker_python: str, timeout: float = 60.0) -> dict:
+def check_env(worker_python: str, timeout: float = 120.0, profile=None) -> dict:
     """Run ``--check-env`` and return the parsed report."""
-    return probe(worker_python, ["--check-env"], timeout=timeout)
+    args = ["--check-env"]
+    if profile:
+        args.extend(["--profile", profile])
+    return probe(worker_python, args, timeout=timeout)
 
 
 def check_cuda(worker_python: str, timeout: float = 120.0) -> dict:

@@ -1,5 +1,7 @@
 # Blender Motion Capture 插件 v0.1 详细开发文档
 
+> 当前实现目标：Blender 4.5.0，Python 3.10.0 双 worker 环境。依赖版本、安装与诊断以 [INSTALL.md](INSTALL.md) 和 `requirements/` 为准；下文早期 4.0 兼容记录仅作历史参考。
+
 本文档是给后续 AI 或工程师执行开发用的施工手册。目标不是解释创意，而是把 Blender 动捕插件 v0.1 从空仓库开发到可验收版本所需的模块、接口、流程、算法、错误处理和测试标准全部固定下来。
 
 总体技术方案见 `docs/TECHNICAL_DESIGN.md`。模型清单、下载地址、profile 和降级规则以 `models/manifest.example.json` 为准；不要在本文档里维护第二套模型数据源。

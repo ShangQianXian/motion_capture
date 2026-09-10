@@ -38,7 +38,7 @@ def require_lifter_api():
         raise errors.MocapError(
             errors.DEPENDENCY_MISSING,
             "worker 环境缺少 mmpose 的 3D 提升接口：{0}".format(exc),
-            suggestion="按 docs/INSTALL.md 执行 mim install mmpose。",
+            suggestion="按 docs/INSTALL.md 运行 tools/bootstrap_worker_env.ps1 -Environment quality。",
             details={"module": "mmpose.apis.inference_pose_lifter_model"},
         )
     try:
@@ -48,7 +48,7 @@ def require_lifter_api():
         raise errors.MocapError(
             errors.DEPENDENCY_MISSING,
             "worker 环境缺少 mmengine/mmpose 数据结构：{0}".format(exc),
-            suggestion="按 docs/INSTALL.md 执行 mim install mmengine mmpose。",
+            suggestion="按 docs/INSTALL.md 运行 tools/bootstrap_worker_env.ps1 -Environment quality。",
             details={"module": "mmpose.structures"},
         )
     return init_model, inference_pose_lifter_model, PoseDataSample, InstanceData
@@ -81,6 +81,43 @@ def build_windows(count: int, window: int = WINDOW_SIZE) -> list:
     return windows
 
 
+def _align_motionbert_targets(data: dict) -> dict:
+    """Match MMPose's dummy 3D targets to MotionBERT's temporal input.
+
+    MMPose 1.3.2's generic lifter API supplies one target frame even for a
+    243-frame input. MotionBERTLabel scales targets in place with a per-frame
+    factor, so both targets and their visibility must cover the input window.
+    These are inference placeholders, not ground-truth or predicted poses.
+    """
+    numpy = mm.require_numpy()
+    aligned = dict(data)
+    frames = data["keypoints"].shape[0]
+    for name in ("lifting_target", "lifting_target_visible"):
+        target = data.get(name)
+        if target is None:
+            continue
+        if target.shape[0] not in (1, frames):
+            raise ValueError("MotionBERT {0} has {1} frames; expected 1 or {2}".format(
+                name, target.shape[0], frames))
+        if target.shape[0] == 1 and frames != 1:
+            aligned[name] = numpy.repeat(target, frames, axis=0)
+    return aligned
+
+
+def _prepare_motionbert_inference_pipeline(model) -> None:
+    """Adapt only this model's MotionBERT encoder; leave package/config files intact."""
+    dataset = model.cfg.test_dataloader.dataset
+    pipeline = []
+    for transform in dataset.pipeline:
+        if (isinstance(transform, dict) and transform.get("type") == "GenerateTarget"
+                and isinstance(transform.get("encoder"), dict)
+                and transform["encoder"].get("type") == "MotionBERTLabel"):
+            if not pipeline or pipeline[-1] is not _align_motionbert_targets:
+                pipeline.append(_align_motionbert_targets)
+        pipeline.append(transform)
+    dataset.pipeline = pipeline
+
+
 class Body3DLifter(object):
     """MotionBERT DSTFormer lifter."""
 
@@ -97,6 +134,7 @@ class Body3DLifter(object):
             reporter.loading_model(model_id=LIFTER_WEIGHTS)
         try:
             self.model = init_model(self.config, self.checkpoint, device=device)
+            _prepare_motionbert_inference_pipeline(self.model)
         except Exception as exc:
             if mm.is_cuda_oom(exc):
                 raise mm.oom_error("加载 MotionBERT", device)
@@ -106,42 +144,68 @@ class Body3DLifter(object):
                 details={"config": self.config, "checkpoint": self.checkpoint},
             )
 
-    def _to_samples(self, keypoints_seq, scores_seq):
+    def _to_samples(self, keypoints_seq, scores_seq, bboxes_seq=None):
         numpy = mm.require_numpy()
         samples = []
-        for keypoints, scores in zip(keypoints_seq, scores_seq):
+        for index, (keypoints, scores) in enumerate(zip(keypoints_seq, scores_seq)):
+            if keypoints is None:
+                samples.append([])
+                continue
             sample = self._PoseDataSample()
             instances = self._InstanceData()
             instances.keypoints = numpy.asarray(keypoints, dtype=numpy.float32)[None, ...]
             instances.keypoint_scores = numpy.asarray(scores, dtype=numpy.float32)[None, ...]
+            points = instances.keypoints[0]
+            if points.shape != (17, 2) or instances.keypoint_scores.shape != (1, 17):
+                raise errors.MocapError(errors.INTERNAL_ERROR, "MotionBERT 输入必须为 17 个二维关节及置信度。")
+            if not numpy.isfinite(points).all() or not numpy.isfinite(instances.keypoint_scores).all():
+                raise errors.MocapError(errors.INTERNAL_ERROR, "MotionBERT 输入包含非有限值。")
+            bbox = bboxes_seq[index] if bboxes_seq is not None else None
+            if bbox is None:
+                low, high = points.min(axis=0), points.max(axis=0)
+                high = numpy.maximum(high, low + 1.0)
+                bbox = (low[0], low[1], high[0], high[1])
+            instances.bboxes = numpy.asarray(bbox[:4], dtype=numpy.float32)[None, ...]
             sample.pred_instances = instances
-            samples.append(sample)
+            sample.gt_instances = self._InstanceData()
+            sample.track_id = 0
+            samples.append([sample])
         return samples
 
-    def lift(self, keypoints_seq, scores_seq, image_size=None):
+    def lift(self, keypoints_seq, scores_seq, image_size=None, bboxes_seq=None, cancel_token=None):
         """Lift a 2D sequence into ``(frames, 17, 3)`` root-relative coordinates."""
         numpy = mm.require_numpy()
-        if not keypoints_seq:
+        if len(keypoints_seq) == 0:
             return numpy.zeros((0, mm.H36M_KEYPOINT_COUNT, 3), dtype=numpy.float32)
-
         frame_count = len(keypoints_seq)
-        output = numpy.zeros((frame_count, mm.H36M_KEYPOINT_COUNT, 3), dtype=numpy.float32)
-
-        for start, end in build_windows(frame_count):
-            window_keypoints = list(keypoints_seq[start:end])
-            window_scores = list(scores_seq[start:end])
-            padded_keypoints = pad_sequence(window_keypoints)
-            padded_scores = pad_sequence(window_scores)
-            offset = (len(padded_keypoints) - len(window_keypoints)) // 2
-            samples = self._to_samples(padded_keypoints, padded_scores)
+        if len(scores_seq) != frame_count or (bboxes_seq is not None and len(bboxes_seq) != frame_count):
+            raise errors.MocapError(errors.INTERNAL_ERROR, "MotionBERT 输入序列长度不一致。")
+        if image_size is None or len(image_size) != 2 or min(image_size) <= 0:
+            raise errors.MocapError(errors.INTERNAL_ERROR, "MotionBERT 需要有效的图像宽高。")
+        samples = self._to_samples(keypoints_seq, scores_seq, bboxes_seq)
+        valid = [index for index, sample in enumerate(samples) if sample]
+        if not valid:
+            raise errors.MocapError(errors.NO_PERSON_DETECTED, "没有可提升的二维姿态。")
+        # Preserve interior gaps for MMPose's track-aware temporal collator.
+        first, last = valid[0], valid[-1]
+        window = int(self.model.cfg.model.backbone.get("seq_len", WINDOW_SIZE))
+        if window <= 0 or window % 2 == 0:
+            raise errors.MocapError(errors.CONFIG_MISSING, "MotionBERT 时间窗口必须为正奇数。")
+        dataset = self.model.cfg.test_dataloader.dataset
+        causal = bool(dataset.get("causal", False))
+        step = int(dataset.get("seq_step", 1))
+        if step <= 0:
+            raise errors.MocapError(errors.CONFIG_MISSING, "MotionBERT seq_step 必须为正整数。")
+        target_index = window - 1 if causal else window // 2
+        output = []
+        for index in valid:
+            if cancel_token is not None and cancel_token.cancelled():
+                raise errors.MocapError(errors.CANCELLED, "MotionBERT 推理已取消。")
+            temporal = [samples[max(first, min(last, index + (offset - target_index) * step))]
+                        for offset in range(window)]
             try:
-                kwargs = {}
-                if image_size is not None:
-                    kwargs["image_size"] = image_size
-                    kwargs["norm_pose_2d"] = True
-                results = self._inference(self.model, samples, **kwargs)
-            except TypeError:
-                results = self._inference(self.model, samples)
+                results = self._inference(self.model, temporal, with_track_id=True,
+                                          image_size=image_size, norm_pose_2d=True)
             except Exception as exc:
                 if mm.is_cuda_oom(exc):
                     raise mm.oom_error("MotionBERT 推理", self.device)
@@ -150,46 +214,32 @@ class Body3DLifter(object):
                 )
 
             lifted = _extract_keypoints_3d(numpy, results)
-            if lifted is None:
+            if lifted is None or len(lifted) not in (1, window):
                 raise errors.MocapError(
                     errors.INTERNAL_ERROR,
                     "MotionBERT 未返回可解析的 3D 关键点。",
-                    details={"window": [start, end]},
+                    details={"frame": index, "window_size": window},
                 )
-            for index in range(end - start):
-                source = offset + index
-                if source < len(lifted):
-                    output[start + index] = lifted[source]
-        return output
+            output.append(lifted[0 if len(lifted) == 1 else target_index])
+        return numpy.stack(output, axis=0)
 
 
 def _extract_keypoints_3d(numpy, results):
-    """Pull ``(frames, 17, 3)`` out of whatever shape MMPose returned."""
-    if results is None:
+    """Decode one person's output, retaining its temporal axis (not person count)."""
+    if not isinstance(results, (list, tuple)) or len(results) != 1:
         return None
-    frames = []
-    sequence = results if isinstance(results, (list, tuple)) else [results]
-    for item in sequence:
-        instances = getattr(item, "pred_instances", None)
-        if instances is None and isinstance(item, dict):
-            instances = item.get("pred_instances") or item
-        keypoints = None
-        if instances is not None:
-            keypoints = getattr(instances, "keypoints", None)
-            if keypoints is None and isinstance(instances, dict):
-                keypoints = instances.get("keypoints")
-        if keypoints is None:
-            continue
-        array = mm._to_numpy(numpy, keypoints)
-        array = numpy.asarray(array, dtype=numpy.float32)
-        if array.ndim == 3:
-            array = array[0]
-        if array.ndim != 2 or array.shape[-1] < 3:
-            continue
-        frames.append(array[:, :3])
-    if not frames:
+    instances = getattr(results[0], "pred_instances", None)
+    keypoints = getattr(instances, "keypoints", None)
+    if keypoints is None:
         return None
-    return numpy.stack(frames, axis=0)
+    array = numpy.asarray(mm._to_numpy(numpy, keypoints), dtype=numpy.float32)
+    if array.ndim == 4 and array.shape[0] == 1:
+        array = array[0]
+    if array.ndim == 2:
+        array = array[None, ...]
+    if array.ndim != 3 or array.shape[1:] != (17, 3) or not numpy.isfinite(array).all():
+        return None
+    return array
 
 
 def h36m_to_standard(joints_3d, confidences=None, scale: float = 1.0) -> tuple:
@@ -223,7 +273,9 @@ def h36m_to_standard(joints_3d, confidences=None, scale: float = 1.0) -> tuple:
                 forward_dir = rm.vec_neg(forward_dir)
             forward = rm.vec_scale(forward_dir, TOE_FORWARD_OFFSET)
         toe = rm.vec_add(ankle, forward)
-        body["toe.{0}".format(side)] = (toe[0], toe[1], max(0.0, ankle[2] - 0.04))
+        # Coordinates are still pelvis-relative: ankles normally have negative Z.
+        # Grounding happens once for the whole body in ground_and_stand().
+        body["toe.{0}".format(side)] = (toe[0], toe[1], ankle[2] - 0.04)
         confidence["toe.{0}".format(side)] = skeleton.SYNTHESISED_CONFIDENCE
 
     scores = [v for k, v in confidence.items() if k in skeleton.BODY_JOINTS]
