@@ -30,6 +30,7 @@ if _NESTED:  # imported as motion_capture.backend_worker._core (inside Blender)
     from ..core import retarget_math  # noqa: F401
     from ..core import skeleton  # noqa: F401
     from ..core import smoothing  # noqa: F401
+    from ..core import preview  # noqa: F401
 else:  # imported as backend_worker._core (worker process)
     from core import errors  # noqa: F401
     from core import job_schema  # noqa: F401
@@ -40,6 +41,7 @@ else:  # imported as backend_worker._core (worker process)
     from core import retarget_math  # noqa: F401
     from core import skeleton  # noqa: F401
     from core import smoothing  # noqa: F401
+    from core import preview  # noqa: F401
 
 __all__ = [
     "errors",
@@ -51,4 +53,5 @@ __all__ = [
     "retarget_math",
     "skeleton",
     "smoothing",
+    "preview",
 ]

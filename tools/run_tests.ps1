@@ -112,7 +112,7 @@ if (-not $SkipBlender) {
     }
 
     foreach ($exe in $found) {
-        foreach ($test in @('test_enable_addon.py', 'test_mock_retarget.py', 'test_retarget_coordinates.py')) {
+        foreach ($test in @('test_enable_addon.py', 'test_mock_retarget.py', 'test_retarget_coordinates.py', 'test_review_workflow.py')) {
             Invoke-Step "blender $test ($exe)" {
                 Push-Location $repoRoot
                 try {

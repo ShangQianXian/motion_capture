@@ -11,9 +11,9 @@ import os
 import platform
 import sys
 
-from ._core import errors, job_schema, model_manifest, paths, result_schema, skeleton
+from ._core import errors, job_schema, model_manifest, paths, preview, result_schema, skeleton
 
-from . import export_result, mock_source, postprocess
+from . import export_result, mock_source, postprocess, preview_export
 
 #: Python modules reported by ``--check-env``.
 OPTIONAL_MODULES = (
@@ -157,6 +157,7 @@ def run_job(job: dict, reporter, cancel_token=None, mock: bool = False) -> str:
     mode = str(job.get("mode") or job_schema.MODE_CAPTURE)
     model_section = job.get("model") or {}
     options = dict(job.get("options") or {})
+    options["_preview_rows"] = []
     input_section = job.get("input") or {}
     output_section = job.get("output") or {}
 
@@ -168,6 +169,10 @@ def run_job(job: dict, reporter, cancel_token=None, mock: bool = False) -> str:
 
     if mock:
         return _run_mock(job, reporter, cancel_token)
+
+    source_identity = job.get('source_identity') or preview.fingerprint(input_section['path'])
+    if not preview.source_matches(source_identity, input_section['path']):
+        raise errors.MocapError(errors.MEDIA_OPEN_FAILED, '素材在任务开始前已改变，请重新生成。')
 
     manifest = model_manifest.load_manifest(models_root)
     report = model_manifest.check_profile_requirements(profile, models_root)
@@ -213,6 +218,8 @@ def run_job(job: dict, reporter, cancel_token=None, mock: bool = False) -> str:
 
     frames, post_warnings = postprocess.postprocess(frames, fps, options, reporter)
     warnings = list(warnings) + list(post_warnings)
+    if not preview.source_matches(source_identity, input_section['path']):
+        raise errors.MocapError(errors.MEDIA_OPEN_FAILED, '素材在捕捉期间已改变，请重新生成。')
 
     result = export_result.build_result(
         frames,
@@ -222,9 +229,16 @@ def run_job(job: dict, reporter, cancel_token=None, mock: bool = False) -> str:
         profile=profile,
         warnings=postprocess.summarise_warnings(warnings),
     )
-    return export_result.write_result(
+    result_path = export_result.write_result(
         result, output_section.get("dir"), output_section.get("result_filename")
     )
+    # Preserve processing flags only in the sidecar, keeping the v0.1 result compatible.
+    flags = {frame["frame"]: frame.get("interpolated_joints", []) for frame in frames}
+    for frame in result["frames"]:
+        frame["interpolated_joints"] = flags.get(frame["frame"], [])
+    preview_export.write(job, result, result_path, options["_preview_rows"],
+                         options.get("_preview_meta", {}), profile)
+    return result_path
 
 
 def _raise_if_cancelled(cancel_token) -> None:
@@ -381,6 +395,7 @@ def _run_mediapipe(job, profile, manifest, reporter, cancel_token, options) -> t
         reporter=reporter,
     )
     video_mode = source.media_type == "video"
+    options["_preview_meta"] = preview_export.source_meta(source)
     body_estimator = pose_mediapipe.MediaPipeBodyEstimator(model_path, video_mode=video_mode)
     hand_estimator = (
         pose_mediapipe.MediaPipeHandEstimator(hand_path, video_mode=video_mode)
@@ -397,10 +412,14 @@ def _run_mediapipe(job, profile, manifest, reporter, cancel_token, options) -> t
     try:
         for decoded in source:
             _raise_if_cancelled(cancel_token)
+            row = preview_export.decoded_row(decoded, frame_start)
+            options.setdefault("_preview_rows", []).append(row)
             timestamp_ms = int(round(decoded.timestamp * 1000.0)) if video_mode else 0
             detection = body_estimator.detect(decoded.image, timestamp_ms)
             world = getattr(detection, "pose_world_landmarks", None) or []
             normalized = getattr(detection, "pose_landmarks", None) or []
+            if normalized:
+                row["body2d"] = preview_export.mp_points(normalized[0])
             if not world:
                 reporter.warning(
                     errors.NO_PERSON_DETECTED,
@@ -431,6 +450,10 @@ def _run_mediapipe(job, profile, manifest, reporter, cancel_token, options) -> t
             if hand_estimator is not None:
                 hand_result = hand_estimator.detect(decoded.image, timestamp_ms)
                 hands = pose_mediapipe.hand_landmarks_to_standard(hand_result, body)
+                for hand_index, landmarks in enumerate(getattr(hand_result, "hand_landmarks", None) or []):
+                    handedness = getattr(hand_result, "handedness", None) or []
+                    label = handedness[hand_index][0].category_name if hand_index < len(handedness) else ""
+                    row["hands2d"].append({"side": label, "points": preview_export.mp_points(landmarks)})
 
             if not world_warning_sent:
                 warnings.append(
@@ -512,6 +535,7 @@ def _run_mmpose(job, profile, manifest, reporter, cancel_token, options) -> tupl
 
     frame_start = int(input_section.get("frame_start") or 1)
     keypoints_seq = []
+    options["_preview_meta"] = preview_export.source_meta(source)
     scores_seq = []
     bboxes_seq = []
     frame_meta = []
@@ -520,6 +544,8 @@ def _run_mmpose(job, profile, manifest, reporter, cancel_token, options) -> tupl
     try:
         for decoded in source:
             _raise_if_cancelled(cancel_token)
+            row = preview_export.decoded_row(decoded, frame_start)
+            options.setdefault("_preview_rows", []).append(row)
             if image_size is None:
                 image_size = (decoded.width, decoded.height)
             bbox = detector.detect(decoded.image)
@@ -545,6 +571,7 @@ def _run_mmpose(job, profile, manifest, reporter, cancel_token, options) -> tupl
                 )
                 continue
             h36m_points, h36m_scores = pose2d_mmpose.coco17_to_h36m17(keypoints, keypoint_scores)
+            row["body2d"] = preview_export.coco_points(keypoints, keypoint_scores, decoded.width, decoded.height)
             keypoints_seq.append(h36m_points)
             scores_seq.append(h36m_scores)
             bboxes_seq.append(bbox)

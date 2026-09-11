@@ -8,6 +8,7 @@ never require it. Failures are reported as structured
 from __future__ import annotations
 
 import os
+import math
 
 from ._core import errors, paths
 
@@ -54,7 +55,8 @@ class DecodedFrame(object):
 class MediaSource(object):
     """Iterable frame source with a known effective frame rate."""
 
-    def __init__(self, path, media_type, fps, total_frames, frames_iter, native_fps=None):
+    def __init__(self, path, media_type, fps, total_frames, frames_iter, native_fps=None,
+                 width=0, height=0, native_total=0):
         self.path = path
         self.media_type = media_type
         self.fps = float(fps)
@@ -62,6 +64,8 @@ class MediaSource(object):
         self.total_frames = int(total_frames)
         self._frames_iter = frames_iter
         self._closed = False
+        self.width, self.height = int(width), int(height)
+        self.native_total = int(native_total or total_frames)
 
     def __iter__(self):
         return self._frames_iter
@@ -123,6 +127,16 @@ def resolve_media_type(path: str, declared: str = "auto") -> str:
     return guessed
 
 
+def read_image(cv2, path):
+    """OpenCV's Windows imread does not reliably accept Unicode paths."""
+    import numpy
+    try:
+        with open(path, "rb") as handle:
+            return cv2.imdecode(numpy.frombuffer(handle.read(), dtype=numpy.uint8), cv2.IMREAD_COLOR)
+    except OSError:
+        return None
+
+
 def open_media(
     path: str,
     media_type: str = "auto",
@@ -150,19 +164,21 @@ def open_media(
     limit = max(MIN_MAX_LONG_SIDE, int(max_long_side)) if max_long_side else 0
 
     if kind == "image":
-        image = cv2.imread(resolved, cv2.IMREAD_COLOR)
+        image = read_image(cv2, resolved)
         if image is None:
             raise errors.MocapError(
                 errors.MEDIA_OPEN_FAILED,
                 "无法解码图片：{0}".format(resolved),
                 details={"path": resolved},
             )
+        height, width = image.shape[:2]
         image, scale = _resize_limit(cv2, image, limit)
 
         def image_frames():
             yield DecodedFrame(0, 0, 0.0, image, scale)
 
-        return MediaSource(resolved, "image", float(target_fps or 30.0), 1, image_frames())
+        return MediaSource(resolved, "image", float(target_fps or 30.0), 1, image_frames(),
+                           width=width, height=height, native_total=1)
 
     capture = cv2.VideoCapture(resolved)
     if not capture.isOpened():
@@ -174,7 +190,7 @@ def open_media(
         )
 
     native_fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
-    if native_fps <= 0.0:
+    if not math.isfinite(native_fps) or native_fps <= 0.0:
         native_fps = float(target_fps or 30.0)
         if reporter is not None:
             reporter.warning(
@@ -182,6 +198,8 @@ def open_media(
                 "无法读取视频帧率，按 {0:.2f} FPS 处理。".format(native_fps),
             )
     native_total = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+    height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
 
     wanted_fps = float(target_fps) if target_fps and target_fps > 0 else native_fps
     step = max(1, int(round(native_fps / wanted_fps))) if wanted_fps > 0 else 1
@@ -203,6 +221,7 @@ def open_media(
         try:
             source_index = 0
             emitted = 0
+            previous_timestamp = -1.0
             if start_index > 0:
                 capture.set(cv2.CAP_PROP_POS_FRAMES, start_index * step)
                 source_index = start_index * step
@@ -213,11 +232,15 @@ def open_media(
                 if not ok or image is None:
                     return
                 if (source_index - start_index * step) % step == 0:
+                    timestamp = float(capture.get(cv2.CAP_PROP_POS_MSEC) or 0.0) / 1000.0
+                    if not math.isfinite(timestamp) or timestamp <= previous_timestamp or (source_index > 0 and timestamp == 0):
+                        timestamp = max(previous_timestamp + 1.0 / effective_fps, source_index / native_fps)
+                    previous_timestamp = timestamp
                     resized, scale = _resize_limit(cv2, image, limit)
                     yield DecodedFrame(
                         emitted,
                         source_index,
-                        source_index / native_fps if native_fps else 0.0,
+                        timestamp,
                         resized,
                         scale,
                     )
@@ -228,4 +251,5 @@ def open_media(
         finally:
             capture.release()
 
-    return MediaSource(resolved, "video", effective_fps, total, video_frames(), native_fps)
+    return MediaSource(resolved, "video", effective_fps, total, video_frames(), native_fps,
+                       width=width, height=height, native_total=native_total)

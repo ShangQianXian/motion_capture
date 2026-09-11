@@ -1,6 +1,11 @@
-# Motion Capture for Rigify (v0.1)
+# Motion Capture for Rigify (v0.2.0)
 
 从视频或图片捕捉单人全身动作，并重定向到 Blender **Rigify Human 生成 rig**，输出可编辑的 Blender Action。
+
+**选择素材 → 生成动捕 → 对照核对 → 确认并应用。** v0.2 提供素材缩略图、实际二维检测叠加、可旋转三维骨架和独立预览时间轴。只有显示过当前匹配结果，才能创建从第 1 帧开始的新 Action；原 Action 保留，支持撤销。
+
+- [v0.2 操作说明与接口](docs/V0_2_REVIEW.md)
+- [v0.2 验证记录](docs/V0_2_VALIDATION.md)
 
 - 设计文档：`docs/TECHNICAL_DESIGN.md`
 - 施工手册：`docs/DEVELOPMENT_GUIDE.md`
@@ -33,7 +38,7 @@ motion_capture/                 <- 安装后即 <blender>/scripts/addons/motion_
 
 开发与回归目标为 **Blender 4.5.0 + 外部 Python 3.10.0 x64**。Quality 使用 `.venv`，Preview / CPU fallback 使用 `.venv-preview`，插件按 profile 自动选择。运行 `tools/bootstrap_worker_env.ps1` 安装锁定环境；详细步骤与 IDE 配置见 [安装说明](docs/INSTALL.md)。
 
-本次修复包括严格环境诊断、独立 OpenCV 环境、MotionBERT API/时间窗口适配、镜像缓存保护、非有限帧率校验，以及烘焙保留用户约束。模型权重和真实素材效果仍需要单独验收。
+沿用严格环境诊断、独立 OpenCV 环境、MotionBERT API/时间窗口适配和用户约束保护。v0.2 已完成真实图片与视频的 MediaPipe / MotionBERT 验证，详细范围见验证记录。
 
 ## 2. 三分钟跑通（不需要任何模型）
 
@@ -50,8 +55,7 @@ motion_capture/                 <- 安装后即 <blender>/scripts/addons/motion_
 
 在 Blender 中：启用 **Motion Capture for Rigify** → 偏好设置里把 `Worker Python` 指向任意
 Python 3.10+（mock 模式不需要推理依赖），`Models Root` 指向本仓库 `models/` → 侧边栏
-`Mocap` → 点 **运行 Mock 捕捉** → **导入结果** → 选中 Rigify rig → **应用到 Rigify** →
-**烘焙 Action**。
+`Mocap` → 选择素材 → 展开 **开发工具**，点 **运行 Mock 捕捉** → **打开对照预览** → 选择 Rigify rig → **确认并应用**。Mock 仅用于流程测试；素材预览仍需在 Preview worker 环境安装 OpenCV。高级烘焙是可选操作。
 
 真实推理请先执行 `.\tools\bootstrap_worker_env.ps1`，再运行 `.\tools\download_models.ps1 -Profile quality`（预览用 `-Profile preview`）。下载器支持续传、完整性检查和配置依赖补齐，详见 [安装说明](docs/INSTALL.md#41-使用下载工具推荐)。
 
@@ -113,20 +117,21 @@ FK 关键帧不会驱动变形骨。
 
 | 阶段 | 状态 | 验证方式 |
 |---|---|---|
-| Phase 0 插件注册 | 完成 | `tests/blender/test_enable_addon.py`（4.5.0：48 检查 PASS） |
+| Phase 0 插件注册 | 完成 | `tests/blender/test_enable_addon.py`（4.5.0：54 检查 PASS） |
 | Phase 1 偏好 / manifest / 预检 UI | 完成 | `tests/unit/test_model_manifest.py` |
 | Phase 2 worker CLI 与 mock 闭环 | 完成 | `tests/unit/test_mock_worker.py`（含真实子进程 CLI 契约测试） |
-| Phase 3 MediaPipe preview | 环境与 Tasks API 验证通过，真实效果待验收 | 仍需 `.task` 权重及真实素材 |
+| Phase 3 MediaPipe 快速捕捉 | 真实图片、视频链路通过 | 33 点实际检测与三维结果同步预览 |
 | Phase 4 Rigify 重定向与烘焙 | 完成 | `tests/blender/test_mock_retarget.py`（4.5.0：63 检查 PASS） |
-| Phase 5 High Quality (MMPose) | CPU/CUDA 算子与无权重 API 契约通过，真实效果待验收 | `tests/worker/test_adapters.py`；仍需权重与完整 config |
+| Phase 5 High Quality (MMPose) | 真实图片、视频链路通过 | COCO 17 点 + MotionBERT，CPU/CUDA 契约通过 |
 | Phase 6 平滑 / 足底锁定 / 错误恢复 | 完成 | `tests/unit/test_smoothing.py` |
 | Phase 7 打包与文档 | 完成 | `tools/build_zip.ps1`、本 README 与 docs/ 下四篇新文档 |
+| v0.2 对照预览与确认 | 完成 | 338 单元测试、169 Blender 检查；真实前台应用与撤销通过 |
 
 Phase 3/5 的推理模块采用**延迟导入 + 结构化错误**：缺少依赖返回 `DEPENDENCY_MISSING`，
 缺少权重/config 返回 `MODEL_MISSING`/`CONFIG_MISSING`，CUDA 不可用返回 `CUDA_UNAVAILABLE`，
 显存不足返回 `CUDA_OOM` 并给出降级建议。精度验收步骤见 `docs/ACCEPTANCE.md`。
 
-## 7. 已知限制（v0.1）
+## 7. 已知限制（v0.2）
 
 - 单人；检测到多人时取面积最大且置信度最高的一个。
 - 无面部捕捉；`head` 控制骨跟随 `neck`，不做独立头部朝向求解。
@@ -135,5 +140,5 @@ Phase 3/5 的推理模块采用**延迟导入 + 结构化错误**：缺少依赖
 - MediaPipe 世界坐标以髋部为原点，全局位移为近似值，运行时会发出
   `MEDIAPIPE_WORLD_APPROXIMATE` 告警。
 - H36M-17 没有脚趾关节，`toe.L/R` 由脚踝外推合成，置信度标记为 0.3。
-- 重定向速度约每帧 5–10 ms（900 帧约 25–35 秒）；长视频可用 `frame_step` 抽帧预览。
+- 重定向耗时取决于帧数和 rig 复杂度；高级 `frame_step` 只控制写入关键帧的步长，对照预览保留全部采样帧。
 - 插件不会在启用或捕捉时自行下载模型；用户可运行 `tools/download_models.ps1` 主动下载。第三方权重与下载配置不进入插件包。

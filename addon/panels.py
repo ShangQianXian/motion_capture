@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import bpy
 
-from ..core import model_manifest
-from . import operators, preferences, properties, ui_text
+from ..core import model_manifest, paths
+from . import operators, preferences, properties, ui_text, review
 
 #: Sidebar category.
 CATEGORY = ui_text.TAB_CATEGORY
@@ -32,6 +32,7 @@ class MOCAP_PT_environment(_MocapPanel):
 
     bl_idname = "MOCAP_PT_environment"
     bl_label = ui_text.PANEL_ENVIRONMENT
+    bl_order = 3
 
     def draw(self, context):
         layout = self.layout
@@ -44,6 +45,12 @@ class MOCAP_PT_environment(_MocapPanel):
 
         models_root = prefs.resolved_models_root()
         worker_python = prefs.resolved_worker_python(props.capture_profile)
+        report = operators.cached_preflight(props.capture_profile, models_root)
+        if report is not None and report.ok:
+            layout.label(text="当前捕捉环境已就绪", icon="CHECKMARK")
+            layout.prop(props, "show_environment", icon="TRIA_DOWN" if props.show_environment else "TRIA_RIGHT", emboss=False)
+            if not props.show_environment:
+                return
 
         column = layout.column(align=True)
         column.label(
@@ -119,6 +126,7 @@ class MOCAP_PT_capture(_MocapPanel):
 
     bl_idname = "MOCAP_PT_capture"
     bl_label = ui_text.PANEL_CAPTURE
+    bl_order = 0
 
     def draw(self, context):
         layout = self.layout
@@ -129,23 +137,48 @@ class MOCAP_PT_capture(_MocapPanel):
             return
 
         column = layout.column(align=True)
+        column.enabled = props.job_status not in ('running', 'applying')
         column.prop(props, "source_media")
         column.prop(props, "source_type")
+        value = review.session(context.scene, create=False)
+        if value:
+            if value.icon_id:
+                layout.template_icon(icon_value=value.icon_id, scale=6.0)
+            if value.info:
+                import os
+                layout.label(text=os.path.basename(props.source_media), icon='IMAGE_DATA')
+                layout.label(text="{width} × {height}".format(**value.info))
+                if value.info['type'] == 'video':
+                    layout.label(text="{duration:.2f} 秒 · {fps:.3f} FPS".format(**value.info))
+            if value.error:
+                layout.label(text=_shorten(value.error, 55), icon='ERROR')
+                row = layout.row(align=True)
+                row.operator('mocap.relocate_source', icon='FILE_FOLDER')
+                row.operator('mocap.preview_control', text='重新加载', icon='FILE_REFRESH').command = 'retry'
+        row = layout.row()
+        row.enabled = bool(props.source_media) and props.job_status != 'applying'
+        row.operator('mocap.open_preview', text='查看素材 / 对照预览', icon='IMAGE_DATA')
+        column = layout.column()
+        column.enabled = props.job_status not in ('running', 'applying')
         column.prop(props, "capture_profile")
+        is_image = props.source_type == 'image' or (props.source_type == 'auto' and paths.guess_media_type(props.source_media) == 'image')
 
-        row = layout.row(align=True)
-        row.prop(props, "frame_start")
-        row.prop(props, "frame_end")
-        layout.prop(props, "target_fps")
+        if not is_image:
+            row = column.row(align=True)
+            row.prop(props, "frame_start")
+            row.prop(props, "frame_end")
+            column.prop(props, "target_fps")
 
-        box = layout.box()
+        box = column.box()
         box.label(text="处理选项", icon="MODIFIER")
-        box.prop(props, "include_hands")
-        box.prop(props, "smoothing_strength", slider=True)
-        box.prop(props, "foot_lock_strength", slider=True)
+        if props.capture_profile in ('preview', 'fallback_cpu'):
+            box.prop(props, "include_hands")
+        if not is_image:
+            box.prop(props, "smoothing_strength", slider=True)
+            box.prop(props, "foot_lock_strength", slider=True)
         box.prop(props, "root_motion")
 
-        running = props.job_status == "running"
+        running = props.job_status in ("running", "applying")
         worker = operators.active_worker()
         blocked, reason = _capture_blocked(props, prefs)
 
@@ -158,13 +191,12 @@ class MOCAP_PT_capture(_MocapPanel):
         run = row.row(align=True)
         run.enabled = not running and not blocked
         run.operator("mocap.run_capture", icon="PLAY").mock = False
-        mock = row.row(align=True)
-        mock.enabled = not running
-        mock.operator("mocap.run_capture", text=ui_text.OP_RUN_MOCK, icon="GHOST_ENABLED").mock = True
-
-        cancel = layout.row()
-        cancel.enabled = running and worker is not None
-        cancel.operator("mocap.cancel_capture", icon="CANCEL")
+        if props.job_status == 'running':
+            cancel = layout.row()
+            cancel.enabled = worker is not None
+            cancel.operator("mocap.cancel_capture", icon="CANCEL")
+        if props.job_status == 'completed':
+            layout.label(text='下一步：打开对照预览并核对动作', icon='INFO')
 
         status = layout.box()
         status.label(
@@ -179,6 +211,52 @@ class MOCAP_PT_capture(_MocapPanel):
                 status.label(text="{0:.0f}%  {1}".format(props.progress * 100.0, props.progress_text))
         if props.last_error:
             status.label(text=_shorten(props.last_error, 60), icon="ERROR")
+        layout.prop(props, 'show_developer', icon='TRIA_DOWN' if props.show_developer else 'TRIA_RIGHT', emboss=False)
+        if props.show_developer:
+            row = layout.row()
+            row.enabled = not running
+            row.operator('mocap.run_capture', text=ui_text.OP_RUN_MOCK, icon='GHOST_ENABLED').mock = True
+            layout.operator('mocap.import_result', text='加载已有结果', icon='IMPORT')
+
+
+class MOCAP_PT_preview(_MocapPanel):
+    bl_idname = 'MOCAP_PT_preview'
+    bl_label = '2 · 预览与校正'
+    bl_order = 1
+
+    def draw(self, context):
+        layout = self.layout
+        props = properties.get_props(context)
+        value = review.session(context.scene, create=False)
+        if not props or not value or not value.state:
+            layout.label(text='生成结果后，在这里核对动作。', icon='INFO')
+            return
+        layout.operator('mocap.open_preview', icon='IMAGE_DATA')
+        layout.prop(props, 'preview_overlay')
+        if value.info.get('type') != 'image':
+            row = layout.row(align=True)
+            row.prop(props, 'preview_frame')
+            row.label(text='/ {0}'.format(value.total()))
+            row = layout.row(align=True)
+            row.enabled = value.view is not None
+            row.operator('mocap.preview_control', text='', icon='REW').command = 'previous'
+            row.operator('mocap.preview_control', text='暂停' if props.preview_playing else '播放',
+                         icon='PAUSE' if props.preview_playing else 'PLAY').command = 'play'
+            row.operator('mocap.preview_control', text='', icon='FF').command = 'next'
+            layout.prop(props, 'preview_speed')
+            layout.prop(props, 'preview_loop')
+            row = layout.row(align=True)
+            row.operator('mocap.preview_control', text='上个问题帧', icon='PREV_KEYFRAME').command = 'problem_previous'
+            row.operator('mocap.preview_control', text='下个问题帧', icon='NEXT_KEYFRAME').command = 'problem_next'
+        if value.state.manifest is None:
+            layout.label(text='旧版 / Mock 结果没有二维检测数据。', icon='INFO')
+        layout.prop(props, 'flip_x')
+        layout.prop(props, 'pitch_correction')
+        layout.operator('mocap.calibrate_pitch', icon='ORIENTATION_GLOBAL')
+        if value.state.stale:
+            layout.label(text='素材或参数已改变，需要重新生成。', icon='ERROR')
+        elif value.state.viewed:
+            layout.label(text='当前预览已显示，可选择 Rigify 应用。', icon='CHECKMARK')
 
 
 def _capture_blocked(props, prefs) -> tuple:
@@ -200,6 +278,7 @@ class MOCAP_PT_rigify(_MocapPanel):
 
     bl_idname = "MOCAP_PT_rigify"
     bl_label = ui_text.PANEL_RIGIFY
+    bl_order = 2
 
     def draw(self, context):
         layout = self.layout
@@ -225,34 +304,25 @@ class MOCAP_PT_rigify(_MocapPanel):
                     icon="ERROR",
                 )
 
-        box = layout.box()
-        box.label(text="重定向选项", icon="CON_ROTLIKE")
-        box.prop(props, "switch_limbs_to_fk")
-        box.prop(props, "flip_x")
-        box.prop(props, "pitch_correction")
-        row = box.row()
-        row.enabled = operators.loaded_result() is not None
-        row.operator("mocap.calibrate_pitch", icon="ORIENTATION_GLOBAL")
-        box.prop(props, "frame_step")
-
-        has_result = bool(props.last_result_path)
-        loaded = operators.loaded_result() is not None
         has_action = bool(props.applied_action_name)
-
+        reason = review.apply_block_reason(context.scene)
         row = layout.row()
-        row.enabled = has_result
-        row.operator("mocap.import_result", icon="IMPORT")
-
-        row = layout.row()
-        row.enabled = loaded and armature is not None
+        row.enabled = not reason
+        row.scale_y = 1.4
         row.operator("mocap.apply_to_rigify", icon="ARMATURE_DATA")
-
-        column = layout.column(align=True)
-        column.enabled = has_action and armature is not None
-        column.prop(props, "clean_curves")
-        column.operator("mocap.bake_action", icon="RENDER_ANIMATION")
-
-        layout.operator("mocap.clear_temp_data", icon="TRASH")
+        if reason:
+            layout.label(text=_shorten(reason, 56), icon='INFO')
+        layout.label(text='新 Action 从第 1 帧开始，保留原动画。', icon='ACTION')
+        layout.prop(props, 'show_advanced', icon='TRIA_DOWN' if props.show_advanced else 'TRIA_RIGHT', emboss=False)
+        if props.show_advanced:
+            box = layout.box()
+            box.prop(props, 'switch_limbs_to_fk')
+            box.prop(props, 'frame_step')
+            column = box.column(align=True)
+            column.enabled = has_action and armature is not None and props.job_status != 'applying'
+            column.prop(props, "clean_curves")
+            column.operator("mocap.bake_action", icon="RENDER_ANIMATION")
+            box.operator("mocap.clear_temp_data", icon="TRASH")
 
         if props.applied_action_name:
             layout.label(text="Action: {0}".format(props.applied_action_name), icon="ACTION")
@@ -266,6 +336,7 @@ class MOCAP_PT_logs(_MocapPanel):
     bl_idname = "MOCAP_PT_logs"
     bl_label = ui_text.PANEL_LOGS
     bl_options = {"DEFAULT_CLOSED"}
+    bl_order = 4
 
     def draw(self, context):
         layout = self.layout
@@ -296,6 +367,7 @@ def _status_icon(status: str) -> str:
         "completed": "CHECKMARK",
         "failed": "ERROR",
         "cancelled": "CANCEL",
+        "applying": "ACTION",
     }.get(str(status), "INFO")
 
 
@@ -309,6 +381,7 @@ def _shorten(text, limit: int = 44) -> str:
 classes = (
     MOCAP_PT_environment,
     MOCAP_PT_capture,
+    MOCAP_PT_preview,
     MOCAP_PT_rigify,
     MOCAP_PT_logs,
 )

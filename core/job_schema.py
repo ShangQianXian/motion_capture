@@ -19,7 +19,8 @@ JOB_VERSION = "0.1"
 #: Supported job modes.
 MODE_CAPTURE = "capture"
 MODE_SELF_TEST = "self_test"
-JOB_MODES = (MODE_CAPTURE, MODE_SELF_TEST)
+MODE_MEDIA_PREVIEW = "media_preview"
+JOB_MODES = (MODE_CAPTURE, MODE_SELF_TEST, MODE_MEDIA_PREVIEW)
 
 #: Supported ``input.type`` values.
 INPUT_TYPES = ("image", "video", "auto")
@@ -244,6 +245,11 @@ def validate_job(job) -> dict:
     """Validate a job dict in place; raises ``JOB_SCHEMA_INVALID`` on problems."""
     if not isinstance(job, dict):
         raise errors.MocapError(errors.JOB_SCHEMA_INVALID, "job 必须是 JSON 对象。")
+
+    if job.get("mode") == MODE_MEDIA_PREVIEW:
+        if not job.get("job_id") or not (job.get("input") or {}).get("path") or not (job.get("output") or {}).get("dir"):
+            raise errors.MocapError(errors.JOB_SCHEMA_INVALID, "媒体预览需要任务编号、素材路径和缓存目录。")
+        return job
 
     problems = []
 

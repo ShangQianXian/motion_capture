@@ -8,7 +8,7 @@
 
 ### 1.1 使用发布包
 
-1. 用 `tools\build_zip.ps1` 生成（或从发布页下载）`motion_capture-0.1.0.zip`。
+1. 用 `tools\build_zip.ps1` 生成（或从发布页下载）`motion_capture-0.2.0.zip`。
 2. Blender → `Edit > Preferences > Add-ons > Install from Disk`，选择该 zip。
 3. 在列表中勾选 **Motion Capture for Rigify**。
 4. 侧边栏出现 `Mocap` 标签（View3D 中按 `N` 打开侧边栏）。
@@ -27,13 +27,13 @@ cd D:\blender_addons\motion_capture
 
 ## 2. 只想先跑通流程？不需要任何模型
 
-mock 模式不加载任何模型，也不需要 torch / mediapipe / opencv：
+Mock 生成不加载任何模型；v0.2 的素材对照预览需要 Preview worker 中的 OpenCV：
 
 1. 偏好设置 → `Worker Python` 填任意 Python 3.10+ 解释器，例如
    `E:\SoftWare\Python\Python3.10.0\python.exe`。
 2. `Models Root` 填仓库的 `models` 目录，例如 `D:\blender_addons\motion_capture\models`。
-3. 侧边栏 `Mocap > 捕捉` → 点 **运行 Mock 捕捉**。
-4. **导入结果** → 在 `Rigify 应用` 面板选中 Rigify rig → **应用到 Rigify** → **烘焙 Action**。
+3. 配置 Preview worker（见下一节），选择一张图片，展开 `Mocap > 素材与生成 > 开发工具` → 点 **运行 Mock 捕捉**。
+4. 打开 **对照预览** → 在 **应用** 面板选中 Rigify rig → **确认并应用**。
 
 这条路径可以完整验证 Blender ↔ worker 的数据流与 Rigify 输出，再去装真实依赖。
 
@@ -202,19 +202,19 @@ Missing required models:
 ## 6. 捕捉流程
 
 1. View3D 侧边栏（`N`）打开 `Mocap`。
-2. `捕捉` 面板选 **源文件**（图片或视频）。
-3. `Rigify 应用` 面板选 **目标 Rig**（Rigify 生成的 rig，**不是** metarig）。
+2. **素材与生成** 面板选 **源文件**，查看缩略图、分辨率，以及视频的时长和帧率。
+3. **应用** 面板选 **目标 Rig**（Rigify 生成的 rig，**不是** metarig）。
 4. 选 **捕捉 Profile**。
 5. 设置起始帧 / 结束帧（0 = 到素材末尾）与目标 FPS。
-6. 点 **运行捕捉**，进度条与日志面板会实时更新；`ESC` 或 **取消捕捉** 可中止。
-7. 点 **导入结果**。
-8. 点 **应用到 Rigify**。
-9. 检查动画，必要时勾选 **左右镜像 (Flip X)** 后重新应用。
-10. 点 **烘焙 Action**。
+6. 点 **生成动捕预览**，等待进度完成；`ESC` 或 **取消捕捉** 可中止。
+7. 结果自动加载，点 **打开对照预览**，核对原素材、二维识别点与三维动作。
+8. 播放、逐帧或跳到问题帧；必要时即时调整镜像和倾斜。平滑和足底锁定修改后需要重新生成。
+9. 核对后点 **确认并应用**，新 Action 从第 1 帧开始。保留原 Action，支持 Ctrl+Z。
+10. 如有高级需求，可展开 **高级选项与烘焙**。完整控件与旧版结果说明见 [v0.2 指南](V0_2_REVIEW.md)。
 
 ### 走路动画整体前倾或后仰
 
-导入结果后，在 **Rigify 应用 → 重定向选项** 点击 **按站立姿态校准**，再点击 **应用到 Rigify**。插件会在 **倾斜校正（X）** 中填入整段动作共用的角度；可以手动微调，0° 表示保留原姿态。导入另一份结果时角度重置为 0°。
+结果加载后，在 **预览与校正** 点击 **按站立姿态校准**，核对三维预览后再 **确认并应用**。插件会在 **倾斜校正（X）** 中填入整段动作共用的角度；可以手动微调，0° 表示保留原姿态。加载另一份结果时角度重置为 0°。
 
 估算假设人物在整段素材中总体直立，适合站立、走路。弯腰、躺卧等动作请保留 0° 或手动设置。校准使用数据副本，保留肢体摆动，重复应用不会累计旋转。
 

@@ -9,7 +9,7 @@
 ```powershell
 cd D:\blender_addons\motion_capture
 .\tools\build_zip.ps1
-# 输出：dist\motion_capture-0.1.0.zip
+# 输出：dist\motion_capture-0.2.0.zip
 ```
 
 脚本行为：
@@ -18,6 +18,7 @@ cd D:\blender_addons\motion_capture
 - zip 内唯一的顶层目录是 `motion_capture/`，这正是 Blender「Install from Disk」期望的结构。
 - 打包前校验 `__init__.py` 与 `models/manifest.example.json` 存在，否则拒绝出包。
 - 输出会报告跳过的权重文件数量。
+- 根目录使用发布内容白名单，不把临时文件或未识别的本地文件打入安装包。
 
 ## 2. 包含 / 排除
 
@@ -55,7 +56,7 @@ cd D:\blender_addons\motion_capture
 
 必须全部通过：
 
-- [ ] `.venv/Scripts/python.exe -m unittest discover -s tests/unit -t .` 全绿（326 个用例，也可用零依赖 Python 3.10.0 执行）
+- [ ] `python -m unittest discover -s tests/unit -t .` 全绿（338 个用例，可用零依赖 Python 3.10.0 执行）
 - [ ] `blender --background --factory-startup --python tests/blender/test_enable_addon.py` 退出码 0
 - [ ] `blender --background --factory-startup --python tests/blender/test_mock_retarget.py` 退出码 0
 - [ ] 上述两个 Blender 测试在目标版本 **Blender 4.5.0** 上通过
@@ -72,7 +73,7 @@ cd D:\blender_addons\motion_capture
 
 | Blender | Python | 状态 |
 |---|---|---|
-| 4.5.0 | 3.11.11 | 通过（48 + 63 项检查） |
+| 4.5.0 | 3.11.11 | 通过（54 + 63 + 16 + 36 项检查） |
 
 兼容性注意点：
 

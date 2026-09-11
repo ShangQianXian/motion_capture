@@ -112,6 +112,8 @@ def postprocess(
         )
         tracks[name] = filled
         for gap in gaps:
+            for index in range(gap["start"], gap["end"] + 1):
+                frames[index].setdefault("interpolated_joints", []).append(name)
             start_frame = frames[gap["start"]].get("frame", gap["start"])
             if gap["held"]:
                 warning = {

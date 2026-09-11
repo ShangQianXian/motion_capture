@@ -28,7 +28,22 @@ from bpy.props import (
 from . import ui_text
 
 #: ``job_status`` values (guide section 11.3).
-JOB_STATUSES = ("idle", "checking", "ready", "running", "completed", "failed", "cancelled")
+JOB_STATUSES = ("idle", "checking", "ready", "running", "completed", "failed", "cancelled", "applying")
+
+
+def _capture_changed(self, context):
+    from . import review
+    review.capture_changed(self, context)
+
+
+def _correction_changed(self, context):
+    from . import review
+    review.correction_changed(self, context)
+
+
+def _frame_changed(self, context):
+    from . import review
+    review.frame_changed(self, context)
 
 
 def _armature_poll(self, obj) -> bool:
@@ -51,12 +66,14 @@ class MotionCaptureSceneProperties(bpy.types.PropertyGroup):
     # -- input -------------------------------------------------------------------------
 
     source_media: StringProperty(
+        update=_capture_changed,
         name=ui_text.PROP_SOURCE_MEDIA,
         description=ui_text.PROP_SOURCE_MEDIA_DESC,
         subtype="FILE_PATH",
         default="",
     )
     source_type: EnumProperty(
+        update=_capture_changed,
         name=ui_text.PROP_SOURCE_TYPE,
         description=ui_text.PROP_SOURCE_TYPE_DESC,
         items=(
@@ -73,6 +90,7 @@ class MotionCaptureSceneProperties(bpy.types.PropertyGroup):
         poll=_armature_poll,
     )
     capture_profile: EnumProperty(
+        update=_capture_changed,
         name=ui_text.PROP_CAPTURE_PROFILE,
         description=ui_text.PROP_CAPTURE_PROFILE_DESC,
         items=ui_text.capture_profile_items(),
@@ -82,18 +100,21 @@ class MotionCaptureSceneProperties(bpy.types.PropertyGroup):
     # -- range -------------------------------------------------------------------------
 
     frame_start: IntProperty(
+        update=_capture_changed,
         name=ui_text.PROP_FRAME_START,
         description=ui_text.PROP_FRAME_START_DESC,
         default=1,
         min=1,
     )
     frame_end: IntProperty(
+        update=_capture_changed,
         name=ui_text.PROP_FRAME_END,
         description=ui_text.PROP_FRAME_END_DESC,
         default=0,
         min=0,
     )
     target_fps: IntProperty(
+        update=_capture_changed,
         name=ui_text.PROP_TARGET_FPS,
         description=ui_text.PROP_TARGET_FPS_DESC,
         default=30,
@@ -104,11 +125,13 @@ class MotionCaptureSceneProperties(bpy.types.PropertyGroup):
     # -- options -----------------------------------------------------------------------
 
     include_hands: BoolProperty(
+        update=_capture_changed,
         name=ui_text.PROP_INCLUDE_HANDS,
         description=ui_text.PROP_INCLUDE_HANDS_DESC,
         default=True,
     )
     smoothing_strength: FloatProperty(
+        update=_capture_changed,
         name=ui_text.PROP_SMOOTHING,
         description=ui_text.PROP_SMOOTHING_DESC,
         default=0.65,
@@ -116,6 +139,7 @@ class MotionCaptureSceneProperties(bpy.types.PropertyGroup):
         max=1.0,
     )
     foot_lock_strength: FloatProperty(
+        update=_capture_changed,
         name=ui_text.PROP_FOOT_LOCK,
         description=ui_text.PROP_FOOT_LOCK_DESC,
         default=0.7,
@@ -123,6 +147,7 @@ class MotionCaptureSceneProperties(bpy.types.PropertyGroup):
         max=1.0,
     )
     root_motion: EnumProperty(
+        update=_capture_changed,
         name=ui_text.PROP_ROOT_MOTION,
         description=ui_text.PROP_ROOT_MOTION_DESC,
         items=(
@@ -140,11 +165,13 @@ class MotionCaptureSceneProperties(bpy.types.PropertyGroup):
         default=True,
     )
     flip_x: BoolProperty(
+        update=_correction_changed,
         name=ui_text.PROP_FLIP_X,
         description=ui_text.PROP_FLIP_X_DESC,
         default=False,
     )
     pitch_correction: FloatProperty(
+        update=_correction_changed,
         name=ui_text.PROP_PITCH_CORRECTION,
         description=ui_text.PROP_PITCH_CORRECTION_DESC,
         subtype="ANGLE",
@@ -166,6 +193,16 @@ class MotionCaptureSceneProperties(bpy.types.PropertyGroup):
     )
 
     # -- job state ---------------------------------------------------------------------
+
+    preview_frame: IntProperty(name="预览帧", default=1, min=1, update=_frame_changed, options={"SKIP_SAVE"})
+    preview_playing: BoolProperty(name="播放", default=False, options={"SKIP_SAVE"})
+    preview_loop: BoolProperty(name="循环播放", default=True)
+    preview_overlay: BoolProperty(name="叠加二维识别关键点", default=True)
+    preview_speed: EnumProperty(name="播放速度", items=(("0.25", "0.25×", "四分之一速度"),
+                                ("0.5", "0.5×", "半速"), ("1", "1×", "原速")), default="1")
+    show_environment: BoolProperty(name="详细环境诊断", default=False)
+    show_advanced: BoolProperty(name="高级选项与烘焙", default=False)
+    show_developer: BoolProperty(name="开发工具", default=False)
 
     job_status: StringProperty(name="Job Status", default="idle")
     effective_profile: StringProperty(name="Effective Profile", default="")

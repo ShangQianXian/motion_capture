@@ -71,7 +71,9 @@ def main():
         from motion_capture.addon import operators
         untouched = copy.deepcopy(operators.loaded_result().frames[0].body3d)
         for repeat in range(2):
-            harness.check(bpy.ops.mocap.apply_to_rigify() == {'FINISHED'}, 'calibrated application {0}'.format(repeat+1))
+            action = adapter.retarget_to_rigify(operators.loaded_result(), rig,
+                adapter.RetargetOptions(pitch_correction=props.pitch_correction))
+            harness.check(action is not None, 'calibrated application {0}'.format(repeat+1))
         harness.check(operators.loaded_result().frames[0].body3d == untouched, 'repeated calibration leaves cached input intact')
     harness.check(result.frames[0].body3d == source, 'retarget preserves source coordinates')
     harness.disable_addon(module, used_operator)

@@ -87,6 +87,12 @@ def main(argv=None) -> int:
         # here: clearing it on this side would race with an immediate cancel and
         # silently discard the request.
         cancel_token = CancellationToken(output_dir)
+        if job.get("mode") == job_schema.MODE_MEDIA_PREVIEW:
+            from . import media_preview
+            with contextlib.redirect_stdout(sys.stderr):
+                media_preview.serve(job, reporter, cancel_token, sys.stdin)
+            reporter.completed("")
+            return EXIT_OK
         reporter.started(
             "Worker started (profile={0}, mock={1})".format(
                 (job.get("model") or {}).get("profile"), bool(args.mock)

@@ -1,5 +1,7 @@
 # 验收清单
 
+v0.2.0 最新记录见 [V0_2_VALIDATION.md](V0_2_VALIDATION.md)：338 项单元测试、169 项 Blender 检查、两套 worker 与真实图片/视频链路已验证。操作流程以 [V0_2_REVIEW.md](V0_2_REVIEW.md) 为准。下面保留 v0.1 基线和扩展素材验收方法。
+
 > 当前实现目标：Blender 4.5.0，Python 3.10.0 双 worker 环境。依赖版本、安装与诊断以 [INSTALL.md](INSTALL.md) 和 `requirements/` 为准；下文早期 4.0 兼容记录仅作历史参考。
 
 对应 `docs/DEVELOPMENT_GUIDE.md` §12 与 `docs/TECHNICAL_DESIGN.md` §10。

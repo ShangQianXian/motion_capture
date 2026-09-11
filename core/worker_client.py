@@ -12,6 +12,7 @@ import subprocess
 import sys
 import threading
 import time
+import json
 
 try:  # pragma: no cover - queue is always available on supported Pythons
     import queue
@@ -67,7 +68,7 @@ def _popen_kwargs() -> dict:
 class WorkerProcess(object):
     """A running ``backend_worker.cli`` process with non-blocking event access."""
 
-    def __init__(self, worker_python: str, job_path: str, output_dir: str = "", extra_args=()) -> None:
+    def __init__(self, worker_python: str, job_path: str, output_dir: str = "", extra_args=(), duplex=False) -> None:
         self.worker_python = paths.normalize(worker_python)
         self.job_path = paths.normalize(job_path)
         self.output_dir = paths.normalize(output_dir) if output_dir else os.path.dirname(self.job_path)
@@ -97,7 +98,10 @@ class WorkerProcess(object):
                 pass
 
         try:
-            self.process = subprocess.Popen(command, **_popen_kwargs())
+            kwargs = _popen_kwargs()
+            if duplex:
+                kwargs["stdin"] = subprocess.PIPE
+            self.process = subprocess.Popen(command, **kwargs)
         except OSError as exc:
             raise errors.MocapError(
                 errors.WORKER_PYTHON_NOT_FOUND,
@@ -239,6 +243,17 @@ class WorkerProcess(object):
         except subprocess.TimeoutExpired:
             return None
 
+    def send(self, request):
+        """Small bounded JSONL commands; never transfer image bytes through the pipe."""
+        if self._closed or not self.is_running() or self.process.stdin is None:
+            return False
+        try:
+            self.process.stdin.write(json.dumps(request, ensure_ascii=False) + "\n")
+            self.process.stdin.flush()
+            return True
+        except (OSError, ValueError):
+            return False
+
     def close(self) -> None:
         """Release handles and stop tracking this process."""
         if self._closed:
@@ -251,6 +266,15 @@ class WorkerProcess(object):
                 pass
         for thread in self._threads:
             thread.join(timeout=0.5)
+        if self.process.stdin is not None:
+            try:
+                self.process.stdin.close()
+            except (OSError, ValueError):
+                pass
+        try:
+            self.process.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            pass
         if self._stderr_handle is not None:
             try:
                 self._stderr_handle.close()

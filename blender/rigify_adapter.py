@@ -304,6 +304,7 @@ class RetargetOptions(object):
         "action_name",
         "progress",
         "pitch_correction",
+        "scene_fps", "start_time", "created_action",
     )
 
     def __init__(
@@ -317,6 +318,8 @@ class RetargetOptions(object):
         action_name: str = "",
         progress=None,
         pitch_correction: float = 0.0,
+        scene_fps=None,
+        start_time=None,
     ) -> None:
         self.root_motion = root_motion
         self.include_hands = bool(include_hands)
@@ -327,6 +330,9 @@ class RetargetOptions(object):
         self.action_name = action_name
         self.progress = progress
         self.pitch_correction = float(pitch_correction)
+        self.scene_fps = scene_fps
+        self.start_time = start_time
+        self.created_action = None
 
 
 def _source_reference(frame, ref: str):
@@ -490,7 +496,7 @@ def _restore(armature, previous_active, previous_mode) -> None:
             pass
 
 
-def retarget_to_rigify(result, armature, options=None) -> bpy.types.Action:
+def _retarget_generator(result, armature, options=None):
     """Insert keyframes on Rigify control bones from a mocap result.
 
     Returns the created Action. Recoverable problems are collected on the
@@ -507,8 +513,10 @@ def retarget_to_rigify(result, armature, options=None) -> bpy.types.Action:
     if not result.frames:
         raise errors.MocapError(errors.RESULT_SCHEMA_INVALID, "结果中没有任何帧。")
 
-    if options.pitch_correction:
-        result = pose_calibration.calibrated_result(result, options.pitch_correction)
+    from ..core import preview
+
+    if options.pitch_correction or options.flip_x:
+        result = preview.corrected_result(result, options.pitch_correction, options.flip_x)
 
     if result_schema.looks_y_up(result):
         warnings.append(
@@ -525,11 +533,6 @@ def retarget_to_rigify(result, armature, options=None) -> bpy.types.Action:
                     CODE_SUSPECT_MIRROR
                 )
             )
-    if options.flip_x:
-        import copy
-        result = copy.deepcopy(result)
-        result_schema.mirror_result_x(result)
-
     mapping = build_rigify_mapping(armature, include_hands=options.include_hands)
     warnings.extend(mapping.warnings)
 
@@ -546,8 +549,17 @@ def retarget_to_rigify(result, armature, options=None) -> bpy.types.Action:
 
     previous_active, previous_mode = _activate(armature)
     action = _ensure_action(armature, options.action_name or result.action_name())
+    options.created_action = action
     scene = bpy.context.scene
     previous_frame = scene.frame_current
+    previous_subframe = scene.frame_subframe
+    start_time = result.frames[0].time if options.start_time is None else options.start_time
+    image = result.source.get("type") == "image"
+
+    def frame_number(frame):
+        if options.scene_fps is None:
+            return float(frame.frame)
+        return preview.action_frame(frame.time, start_time, options.scene_fps, image)
 
     try:
         for chain in chains:
@@ -556,21 +568,24 @@ def retarget_to_rigify(result, armature, options=None) -> bpy.types.Action:
                 pose_bone.rotation_mode = ROTATION_MODE
 
         if options.switch_limbs_to_fk:
-            if not _switch_to_fk(armature, result.frames[0].frame):
+            if not _switch_to_fk(armature, 1.0 if options.scene_fps else result.frames[0].frame):
                 warnings.append("目标 rig 上没有 IK_FK 属性，跳过 FK 切换。")
 
         skipped = {}
-        total = len(result.frames)
+        frames_to_apply = result.frames[:1] if image and options.scene_fps is not None else result.frames
+        total = len(frames_to_apply)
         written = 0
 
-        for position, frame in enumerate(result.frames):
+        for position, frame in enumerate(frames_to_apply):
             if (
                 options.frame_step > 1
                 and position % options.frame_step
                 and position not in (0, total - 1)
             ):
                 continue
-            scene.frame_set(frame.frame)
+            key_frame = frame_number(frame)
+            import math
+            scene.frame_set(math.floor(key_frame), subframe=key_frame - math.floor(key_frame))
 
             for group in depth_groups:
                 for chain in group:
@@ -596,13 +611,14 @@ def retarget_to_rigify(result, armature, options=None) -> bpy.types.Action:
                 pose_bone = armature.pose.bones.get(chain.bone_name)
                 if pose_bone is None:
                     continue
-                pose_bone.keyframe_insert("rotation_quaternion", frame=frame.frame)
+                pose_bone.keyframe_insert("rotation_quaternion", frame=key_frame)
                 if chain.spec.mode == skeleton.MODE_ROOT:
-                    pose_bone.keyframe_insert("location", frame=frame.frame)
+                    pose_bone.keyframe_insert("location", frame=key_frame)
             written += 1
 
             if options.progress is not None and (position % 15 == 0 or position == total - 1):
                 options.progress(position + 1, total)
+            yield (position + 1, total)
 
         for bone_name, count in sorted(skipped.items()):
             warnings.append(
@@ -612,7 +628,7 @@ def retarget_to_rigify(result, armature, options=None) -> bpy.types.Action:
             )
     finally:
         try:
-            scene.frame_set(previous_frame)
+            scene.frame_set(previous_frame, subframe=previous_subframe)
         except Exception:  # pragma: no cover - defensive
             pass
         _restore(armature, previous_active, previous_mode)
@@ -620,9 +636,94 @@ def retarget_to_rigify(result, armature, options=None) -> bpy.types.Action:
     action["mocap_warnings"] = warnings
     action["mocap_profile"] = result.profile
     action["mocap_source"] = result.source_path
-    action["mocap_frame_start"] = result.frame_start
-    action["mocap_frame_end"] = result.frame_end
+    action["mocap_frame_start"] = 1.0 if options.scene_fps else result.frame_start
+    action["mocap_frame_end"] = frame_number(result.frames[-1])
     action["mocap_bones"] = [chain.bone_name for chain in chains]
     action["mocap_written_frames"] = written
     action["mocap_scale"] = scale
     return action
+
+
+class RigSnapshot:
+    """Rollback exactly the rig state this operation may alter, including FK switches."""
+
+    def __init__(self, armature):
+        self.armature = armature
+        self.had_animation = armature.animation_data is not None
+        self.action = armature.animation_data.action if self.had_animation else None
+        self.fake_user = self.action.use_fake_user if self.action else False
+        self.bones = {}
+        for bone in armature.pose.bones:
+            self.bones[bone.name] = (
+                bone.rotation_mode, bone.location.copy(), bone.rotation_euler.copy(),
+                bone.rotation_quaternion.copy(), tuple(bone.rotation_axis_angle), bone.scale.copy(),
+                bone.get(skeleton.IK_FK_PROPERTY),
+            )
+        self.scene = bpy.context.scene
+        self.frame = self.scene.frame_current
+        self.subframe = self.scene.frame_subframe
+        self.selected = list(bpy.context.selected_objects)
+        self.active = bpy.context.view_layer.objects.active
+        self.mode = armature.mode
+        self.hidden = armature.hide_get()
+
+    def restore_context(self):
+        rig = self.armature
+        if rig.mode != self.mode:
+            try:
+                bpy.context.view_layer.objects.active = rig
+                bpy.ops.object.mode_set(mode=self.mode)
+            except RuntimeError:
+                pass
+        for obj in bpy.context.view_layer.objects:
+            obj.select_set(obj in self.selected)
+        rig.hide_set(self.hidden)
+        bpy.context.view_layer.objects.active = self.active
+        self.scene.frame_set(self.frame, subframe=self.subframe)
+
+    def rollback(self, created_action):
+        rig = self.armature
+        if rig.animation_data is not None:
+            rig.animation_data.action = self.action
+        if self.action:
+            self.action.use_fake_user = self.fake_user
+        if not self.had_animation:
+            rig.animation_data_clear()
+        if created_action is not None and created_action != self.action:
+            bpy.data.actions.remove(created_action)
+        self.restore_context()
+        for name, values in self.bones.items():
+            bone = rig.pose.bones.get(name)
+            if bone is None:
+                continue
+            (bone.rotation_mode, bone.location, bone.rotation_euler, bone.rotation_quaternion,
+             bone.rotation_axis_angle, bone.scale) = values[:6]
+            if values[6] is not None:
+                bone[skeleton.IK_FK_PROPERTY] = values[6]
+        bpy.context.view_layer.update()
+
+
+def retarget_steps(result, armature, options=None):
+    """Yield after each frame so the operator can display progress and accept ESC."""
+    options = options or RetargetOptions()
+    options.created_action = None
+    snapshot = RigSnapshot(armature)
+    try:
+        action = yield from _retarget_generator(result, armature, options)
+        if snapshot.action:
+            snapshot.action.use_fake_user = True
+        snapshot.restore_context()
+        return action
+    except BaseException:  # GeneratorExit is cancellation, and must roll back too.
+        snapshot.rollback(options.created_action)
+        raise
+
+
+def retarget_to_rigify(result, armature, options=None) -> bpy.types.Action:
+    """Synchronous compatibility API; the UI uses the same transactional iterator."""
+    steps = retarget_steps(result, armature, options)
+    while True:
+        try:
+            next(steps)
+        except StopIteration as finished:
+            return finished.value

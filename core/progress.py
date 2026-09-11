@@ -20,6 +20,7 @@ EVENT_CANCELLED = "cancelled"
 
 #: Events the worker is allowed to emit (guide section 5.2).
 ALLOWED_EVENTS = (
+    "media_info", "media_frame", "media_error",
     EVENT_STARTED,
     EVENT_LOADING_MODEL,
     EVENT_PROCESSING_FRAME,

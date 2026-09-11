@@ -14,7 +14,7 @@ from __future__ import annotations
 bl_info = {
     "name": "Motion Capture for Rigify",
     "author": "Project Team",
-    "version": (0, 1, 0),
+    "version": (0, 2, 0),
     "blender": (4, 5, 0),
     "location": "View3D > Sidebar > Mocap",
     "description": "Capture body motion from video or image and retarget it to Rigify rigs.",
@@ -37,6 +37,7 @@ _RELOADABLE = (
     "core.job_schema",
     "core.result_schema",
     "core.pose_calibration",
+    "core.preview",
     "core.progress",
     "core.worker_client",
     "core.worker_environment",
@@ -46,6 +47,8 @@ _RELOADABLE = (
     "addon.ui_text",
     "addon.preferences",
     "addon.properties",
+    "addon.review",
+    "addon.preview_view",
     "addon.operators",
     "addon.panels",
 )
@@ -68,11 +71,11 @@ if "_ALREADY_LOADED" in locals():  # pragma: no cover - only on a reload
     _reload_submodules()
 _ALREADY_LOADED = True
 
-from .addon import operators, panels, preferences, properties  # noqa: E402
+from .addon import operators, panels, preferences, properties, review, preview_view  # noqa: E402
 
 #: Registration order matters: property groups before the PointerProperty that
 #: uses them, operators before the panels that reference them.
-_CLASS_MODULES = (preferences, properties, operators, panels)
+_CLASS_MODULES = (preferences, properties, operators, preview_view, panels)
 
 _registered_classes = []
 
@@ -89,6 +92,7 @@ def register() -> None:
                 bpy.utils.register_class(cls)
                 _registered_classes.append(cls)
         properties.register_scene_properties()
+        review.register()
     except Exception:
         _rollback()
         raise
@@ -96,6 +100,7 @@ def register() -> None:
 
 def _rollback() -> None:
     """Unregister whatever the failed :func:`register` already registered."""
+    review.unregister()
     properties.unregister_scene_properties()
     for cls in reversed(_registered_classes):
         try:
@@ -116,6 +121,7 @@ def unregister() -> None:
         operators.clear_caches()
     except Exception:  # noqa: BLE001 - teardown must not raise
         pass
+    review.unregister()
     try:
         from .core import worker_client
 

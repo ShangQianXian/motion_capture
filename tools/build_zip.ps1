@@ -41,6 +41,7 @@ $zipPath = Join-Path $OutputDir ("{0}-{1}.zip" -f $packageName, $version)
 $excludedDirs = @('.git', '.venv', '.venv-preview', 'venv', '.cache', '.downloads', '_sources', '.idea', '.vscode', '.agents', '.codex', '__pycache__', 'dist', '.mocap_jobs', '.pytest_cache')
 # File patterns that are never packaged (model weights must stay out).
 $excludedFilePatterns = @('*.pth', '*.task', '*.onnx', '*.pt', '*.ckpt', '*.zip', '*.log', '*.blend1', '*.mp4', '*.mov', '*.avi', '*.mkv')
+$includedRoots = @('__init__.py', 'README.md', '.gitignore', 'addon', 'backend_worker', 'blender', 'core', 'docs', 'models', 'requirements', 'tests', 'tools')
 
 Write-Host "packaging $packageName $version"
 
@@ -54,6 +55,7 @@ $skippedWeights = 0
 Get-ChildItem -Path $repoRoot -Recurse -File -Force | ForEach-Object {
     $relative = $_.FullName.Substring($repoRoot.Length).TrimStart('\', '/')
     $parts = $relative -split '[\\/]'
+    if ($includedRoots -notcontains $parts[0]) { return }
     if ($relative -eq 'models\manifest.json' -or $relative -eq 'models/manifest.json') { return }
     if ($parts[0] -eq 'models' -and $_.Extension -eq '.py') { return }
 

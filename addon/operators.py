@@ -18,8 +18,8 @@ import bpy
 from bpy.props import BoolProperty, StringProperty
 
 from ..core import errors, job_schema, model_manifest, paths, progress as progress_mod
-from ..core import result_schema, worker_client
-from . import preferences, properties, ui_text
+from ..core import result_schema, worker_client, preview
+from . import preferences, properties, ui_text, review
 
 #: Modal timer interval in seconds.
 TIMER_INTERVAL = 0.15
@@ -28,11 +28,8 @@ TIMER_INTERVAL = 0.15
 _preflight_cache = {}
 
 #: The running worker, if any. Only one capture at a time in v0.1.
-_active_job = {"worker": None, "job": None}
-
-#: Result loaded by ``mocap.import_result``, consumed by ``mocap.apply_to_rigify``.
-_loaded_result = {"result": None, "path": ""}
-
+_active_job = {"worker": None, "job": None, "scene": None, "operator": None}
+_active_application = None
 
 # --------------------------------------------------------------------------------------
 # Shared helpers
@@ -90,8 +87,9 @@ def cached_preflight(profile: str, models_root: str):
 def clear_caches() -> None:
     """Drop every module-level cache; called from ``unregister``."""
     _preflight_cache.clear()
-    _loaded_result["result"] = None
-    _loaded_result["path"] = ""
+    capture_operator = _active_job.get('operator')
+    if capture_operator is not None:
+        capture_operator._remove_timer(bpy.context)
     worker = _active_job.get("worker")
     if worker is not None:
         try:
@@ -100,6 +98,12 @@ def clear_caches() -> None:
             pass
     _active_job["worker"] = None
     _active_job["job"] = None
+    _active_job["scene"] = None
+    _active_job["operator"] = None
+    global _active_application
+    if _active_application is not None:
+        _active_application.abort()
+        _active_application = None
 
 
 def active_worker():
@@ -107,9 +111,10 @@ def active_worker():
     return _active_job.get("worker")
 
 
-def loaded_result():
+def loaded_result(context=None):
     """The imported :class:`result_schema.MocapResult`, or ``None``."""
-    return _loaded_result.get("result")
+    value = review.session((context or bpy.context).scene, create=False)
+    return value.state.result if value and value.state else None
 
 
 def _blend_path() -> str:
@@ -414,7 +419,7 @@ class MOCAP_OT_run_capture(bpy.types.Operator):
         if prefs is None or props is None:
             return {"CANCELLED"}
 
-        if _active_job.get("worker") is not None and _active_job["worker"].is_running():
+        if _active_application is not None or (_active_job.get("worker") is not None and _active_job["worker"].is_running()):
             return _fail(self, props, errors.MocapError(
                 errors.JOB_SCHEMA_INVALID, "已有捕捉任务在运行，请先取消。"
             ))
@@ -434,11 +439,14 @@ class MOCAP_OT_run_capture(bpy.types.Operator):
             job = job_schema.build_job(
                 props, prefs, blend_path=_blend_path(), resolve_path=bpy.path.abspath
             )
+            job["review_settings"] = preview.settings_snapshot(props)
+            job["source_identity"] = preview.fingerprint(job['input']['path'])
             job_path = job_schema.write_job(job)
         except errors.MocapError as exc:
             return _fail(self, props, exc)
 
         props.reset_job_state()
+        review.begin_capture(context.scene)
         props.clear_log()
         props.last_result_path = ""
         props.last_job_dir = job["output"]["dir"]
@@ -458,6 +466,9 @@ class MOCAP_OT_run_capture(bpy.types.Operator):
 
         _active_job["worker"] = worker
         _active_job["job"] = job
+        _active_job["scene"] = context.scene
+        _active_job["operator"] = self
+        self._scene = context.scene
         _info(self, props, ui_text.MSG_CAPTURE_STARTED.format(job["job_id"]))
 
         window = context.window
@@ -486,13 +497,18 @@ class MOCAP_OT_run_capture(bpy.types.Operator):
             pass
 
     def modal(self, context, event):
-        props = properties.get_props(context)
+        try:
+            props = self._scene.mocap_props
+        except ReferenceError:
+            clear_caches()
+            self._remove_timer(context)
+            return {"CANCELLED"}
         worker = _active_job.get("worker")
         if worker is None:
             self._remove_timer(context)
             return {"CANCELLED"}
 
-        if event.type == "ESC":
+        if event.type == "ESC" and context.scene == self._scene:
             worker.cancel()
             if props is not None:
                 props.log("WARNING", ui_text.MSG_CAPTURE_CANCELLED)
@@ -533,6 +549,8 @@ class MOCAP_OT_run_capture(bpy.types.Operator):
 
         _active_job["worker"] = None
         _active_job["job"] = None
+        _active_job["scene"] = None
+        _active_job["operator"] = None
         try:
             worker.close()
         except Exception:  # pragma: no cover
@@ -556,6 +574,11 @@ class MOCAP_OT_run_capture(bpy.types.Operator):
                 errors.WORKER_EXIT_ERROR, "worker 结束但没有返回结果路径。"
             ))
         props.set_status("completed")
+        try:
+            review.load_result(props.id_data, result_path)
+        except errors.MocapError as exc:
+            props.set_status("failed")
+            return _fail(self, props, exc)
         _info(self, props, ui_text.MSG_CAPTURE_DONE.format(result_path))
         return {"FINISHED"}
 
@@ -603,25 +626,29 @@ class MOCAP_OT_import_result(bpy.types.Operator):
     bl_options = {"REGISTER"}
 
     filepath: StringProperty(subtype="FILE_PATH", default="", options={"SKIP_SAVE"})
+    filter_glob: StringProperty(default="*.json", options={"HIDDEN"})
+
+    def invoke(self, context, event):
+        context.window_manager.fileselect_add(self)
+        return {'RUNNING_MODAL'}
 
     def execute(self, context):
         props = properties.get_props(context)
         if props is None:
             return {"CANCELLED"}
+        if props.job_status in ('running', 'applying'):
+            self.report({'WARNING'}, '请等待当前任务完成后再加载结果。')
+            return {'CANCELLED'}
         path = self.filepath or props.last_result_path
         if not path:
             return _fail(self, props, errors.MocapError(
                 errors.RESULT_SCHEMA_INVALID, ui_text.MSG_NO_RESULT
             ))
         try:
-            result = result_schema.load_mocap_result(bpy.path.abspath(path))
+            result = review.load_result(context.scene, path, restore_settings=True)
         except errors.MocapError as exc:
             return _fail(self, props, exc)
 
-        if _loaded_result.get("path") != result.path:
-            props.pitch_correction = 0.0
-        _loaded_result["result"] = result
-        _loaded_result["path"] = result.path
         props.last_result_path = result.path
         props.result_frame_start = result.frame_start
         props.result_frame_end = result.frame_end
@@ -653,7 +680,7 @@ class MOCAP_OT_calibrate_pitch(bpy.types.Operator):
         props = properties.get_props(context)
         if props is None:
             return {"CANCELLED"}
-        result = _loaded_result.get("result")
+        result = loaded_result(context)
         if result is None:
             return _fail(self, props, errors.MocapError(
                 errors.RESULT_SCHEMA_INVALID, "请先点击“导入结果”。"))
@@ -661,7 +688,7 @@ class MOCAP_OT_calibrate_pitch(bpy.types.Operator):
             props.pitch_correction = pose_calibration.estimate_standing_pitch(result)
         except errors.MocapError as exc:
             return _fail(self, props, exc)
-        _info(self, props, "已设置 X 轴倾斜校正 {0:.1f}°，点击“应用到 Rigify”生效。".format(
+        _info(self, props, "已设置 X 轴倾斜校正 {0:.1f}°，请在对照预览核对后确认应用。".format(
             math.degrees(props.pitch_correction)))
         _tag_redraw()
         return {"FINISHED"}
@@ -675,59 +702,112 @@ class MOCAP_OT_apply_to_rigify(bpy.types.Operator):
     bl_description = ui_text.OP_APPLY_RIGIFY_DESC
     bl_options = {"REGISTER", "UNDO"}
 
+    _timer = None
+    _steps = None
+
+    def invoke(self, context, event):
+        return self.execute(context)
+
     def execute(self, context):
-        from ..blender import action_baker, rigify_adapter
+        global _active_application
+        from ..blender import rigify_adapter
 
         props = properties.get_props(context)
-        if props is None:
-            return {"CANCELLED"}
-        result = _loaded_result.get("result")
-        if result is None:
-            return _fail(self, props, errors.MocapError(
-                errors.RESULT_SCHEMA_INVALID, "请先点击“导入结果”。"
-            ))
-        armature = props.target_armature
-        if armature is None:
-            return _fail(self, props, errors.MocapError(
-                errors.RIGIFY_NOT_FOUND, ui_text.MSG_SELECT_ARMATURE
-            ))
-
-        window_manager = context.window_manager
-        window_manager.progress_begin(0, 100)
-
-        def report_progress(done, total):
-            window_manager.progress_update(int(100.0 * done / max(1, total)))
-            props.progress = float(done) / max(1, total)
-
-        options = rigify_adapter.RetargetOptions(
-            root_motion=props.root_motion,
-            include_hands=props.include_hands,
-            switch_limbs_to_fk=props.switch_limbs_to_fk,
-            flip_x=props.flip_x,
-            frame_step=props.frame_step,
-            pitch_correction=props.pitch_correction,
-            progress=report_progress,
+        reason = review.apply_block_reason(context.scene)
+        if _active_application is not None:
+            reason = "已有应用操作在运行。"
+        if reason:
+            return _fail(self, props, errors.MocapError(errors.RESULT_SCHEMA_INVALID, reason))
+        value = review.session(context.scene)
+        state = value.state
+        if value.view:
+            value.view.finish()
+        self._scene = context.scene
+        self._view_layer = context.view_layer
+        self._window = context.window
+        self._wm = context.window_manager
+        self._wm.progress_begin(0, 100)
+        self._rig = props.target_armature
+        self._options = rigify_adapter.RetargetOptions(
+            root_motion=props.root_motion, include_hands=props.include_hands,
+            switch_limbs_to_fk=props.switch_limbs_to_fk, flip_x=props.flip_x,
+            frame_step=props.frame_step, pitch_correction=props.pitch_correction,
+            scene_fps=context.scene.render.fps / context.scene.render.fps_base,
+            start_time=value.rows[0]["time"] if value.rows else state.result.frames[0].time,
         )
+        self._steps = rigify_adapter.retarget_steps(state.result, self._rig, self._options)
+        props.set_status("applying")
+        props.progress = 0
+        props.last_error = ""
+        _active_application = self
+        if bpy.app.background or context.window is None:
+            return self.advance(blocking=True)
+        self._timer = self._wm.event_timer_add(0.015, window=self._window)
+        self._wm.modal_handler_add(self)
+        return {'RUNNING_MODAL'}
+
+    def advance(self, blocking=False):
+        import math
+        import time
+        from ..blender import action_baker
+        props = self._scene.mocap_props
+        deadline = time.monotonic() + .035
         try:
-            action = rigify_adapter.retarget_to_rigify(result, armature, options)
-        except errors.MocapError as exc:
-            return _fail(self, props, exc)
-        except Exception as exc:  # noqa: BLE001 - surface unexpected failures cleanly
-            return _fail(self, props, errors.wrap_unexpected(exc, "retarget"))
-        finally:
-            window_manager.progress_end()
-
-        summary = action_baker.action_summary(action)
-        props.applied_action_name = action.name
-        for warning in summary.get("warnings") or []:
-            props.log("WARNING", str(warning))
-        _info(
-            self,
-            props,
-            ui_text.MSG_APPLIED.format(summary["name"], summary["fcurves"], summary["keyframes"]),
-        )
+            with bpy.context.temp_override(scene=self._scene, view_layer=self._view_layer):
+                while True:
+                    done, total = next(self._steps)
+                    props.progress = done / max(1, total)
+                    props.progress_text = "应用动作 {0}/{1} · Esc 取消".format(done, total)
+                    self._wm.progress_update(int(props.progress * 100))
+                    if not blocking and time.monotonic() >= deadline:
+                        break
+        except StopIteration as finished:
+            self._steps = None
+            action = finished.value
+            props.applied_action_name = action.name
+            props.result_frame_start = 1
+            props.result_frame_end = math.ceil(action["mocap_frame_end"])
+            props.progress = 1
+            summary = action_baker.action_summary(action)
+            for warning in summary.get("warnings") or []:
+                props.log("WARNING", str(warning))
+            self.finish()
+            _info(self, props, ui_text.MSG_APPLIED.format(summary["name"], summary["fcurves"], summary["keyframes"]))
+            return {'FINISHED'}
+        except Exception as exc:
+            self.abort()
+            return _fail(self, props, exc if isinstance(exc, errors.MocapError) else errors.wrap_unexpected(exc, "retarget"))
         _tag_redraw()
-        return {"FINISHED"}
+        return {'RUNNING_MODAL'}
+
+    def finish(self):
+        global _active_application
+        if self._timer is not None:
+            self._wm.event_timer_remove(self._timer)
+            self._timer = None
+        self._wm.progress_end()
+        self._scene.mocap_props.set_status("completed")
+        _active_application = None
+        _tag_redraw()
+
+    def abort(self):
+        if self._steps is not None:
+            with bpy.context.temp_override(scene=self._scene, view_layer=self._view_layer):
+                self._steps.close()
+            self._steps = None
+        self.finish()
+
+    def cancel(self, context):
+        self.abort()
+
+    def modal(self, context, event):
+        if event.type == 'ESC' or context.scene != self._scene:
+            self.abort()
+            self.report({'INFO'}, "已取消应用，原 Action 和姿态已恢复。")
+            return {'CANCELLED'}
+        if event.type == 'TIMER':
+            return self.advance()
+        return {'RUNNING_MODAL'}
 
 
 class MOCAP_OT_bake_action(bpy.types.Operator):

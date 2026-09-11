@@ -38,11 +38,15 @@ OPERATOR_CLASSES = (
     "MOCAP_OT_apply_to_rigify",
     "MOCAP_OT_bake_action",
     "MOCAP_OT_clear_temp_data",
+    "MOCAP_OT_open_preview",
+    "MOCAP_OT_preview_control",
+    "MOCAP_OT_relocate_source",
 )
 
 PANELS = (
     "MOCAP_PT_environment",
     "MOCAP_PT_capture",
+    "MOCAP_PT_preview",
     "MOCAP_PT_rigify",
     "MOCAP_PT_logs",
 )
@@ -62,7 +66,7 @@ def main() -> None:
 
     harness.section("bl_info")
     info = getattr(module, "bl_info", {})
-    harness.check_equal(info.get("version"), (0, 1, 0), "bl_info version")
+    harness.check_equal(info.get("version"), (0, 2, 0), "bl_info version")
     harness.check_equal(info.get("blender"), (4, 5, 0), "bl_info minimum Blender")
     harness.check_equal(info.get("category"), "Animation", "bl_info category")
 

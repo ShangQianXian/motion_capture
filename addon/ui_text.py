@@ -14,8 +14,8 @@ from ..core import model_manifest
 TAB_CATEGORY = "Mocap"
 
 PANEL_ENVIRONMENT = "环境与模型"
-PANEL_CAPTURE = "捕捉"
-PANEL_RIGIFY = "Rigify 应用"
+PANEL_CAPTURE = "1 · 素材与生成"
+PANEL_RIGIFY = "3 · 确认并应用"
 PANEL_LOGS = "日志"
 
 # -- Preferences ------------------------------------------------------------------------
@@ -85,7 +85,7 @@ OP_TEST_PREVIEW = "测试 Preview 模型"
 OP_TEST_PREVIEW_DESC = "加载 MediaPipe 模型验证 preview 链路"
 OP_TEST_QUALITY = "测试 High Quality 模型"
 OP_TEST_QUALITY_DESC = "加载 RTMDet/RTMPose/MotionBERT 验证高精度链路"
-OP_RUN_CAPTURE = "运行捕捉"
+OP_RUN_CAPTURE = "生成动捕预览"
 OP_RUN_CAPTURE_DESC = "启动外部 worker 执行动作捕捉"
 OP_RUN_MOCK = "运行 Mock 捕捉"
 OP_RUN_MOCK_DESC = "不加载任何模型，生成合成动作用于验证流程"
@@ -93,8 +93,8 @@ OP_CANCEL_CAPTURE = "取消捕捉"
 OP_CANCEL_CAPTURE_DESC = "请求 worker 停止当前任务"
 OP_IMPORT_RESULT = "导入结果"
 OP_IMPORT_RESULT_DESC = "读取并校验 mocap_result.json"
-OP_APPLY_RIGIFY = "应用到 Rigify"
-OP_APPLY_RIGIFY_DESC = "把导入的动作写成 Rigify 控制骨的关键帧"
+OP_APPLY_RIGIFY = "确认并应用"
+OP_APPLY_RIGIFY_DESC = "确认已核对当前预览，创建从第 1 帧开始的新 Action；保留原动画"
 OP_CALIBRATE_PITCH = "按站立姿态校准"
 OP_CALIBRATE_PITCH_DESC = "假设人物总体直立，根据整段动作估算 X 轴倾斜校正。适合站立、走路；弯腰、躺卧动作请手动调整"
 OP_BAKE_ACTION = "烘焙 Action"
@@ -105,6 +105,7 @@ OP_CLEAR_TEMP_DESC = "删除本插件创建的临时对象和约束"
 # -- Status -----------------------------------------------------------------------------
 
 STATUS_LABELS = {
+    "applying": "正在应用动作",
     "idle": "空闲",
     "checking": "检查中",
     "ready": "就绪",
@@ -115,7 +116,7 @@ STATUS_LABELS = {
 }
 
 PROFILE_LABELS = {
-    "preview": "Preview（MediaPipe 快速预览）",
+    "preview": "快速捕捉（MediaPipe）",
     "quality": "Quality（RTMPose + MotionBERT）",
     "quality_plus": "Quality Plus（RTMPose-x）",
     "fallback_cpu": "CPU Fallback（低配兜底）",
