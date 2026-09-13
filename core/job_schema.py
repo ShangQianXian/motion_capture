@@ -11,7 +11,7 @@ import json
 import os
 import uuid
 
-from . import errors, model_manifest, paths
+from . import errors, model_manifest, paths, motion_processing
 
 #: Job schema version written into every job file.
 JOB_VERSION = "0.1"
@@ -221,6 +221,8 @@ def build_job(
             "models_root": models_root,
         },
         "options": {
+            "motion_type": _get(scene_props, 'motion_type', 'general'),
+            "processing_version": motion_processing.VERSION,
             "single_person": True,
             "include_hands": bool(_get(scene_props, "include_hands", True)),
             "smoothing_strength": _clamp(_get_float(scene_props, "smoothing_strength", 0.65), 0.0, 1.0),
@@ -252,6 +254,8 @@ def validate_job(job) -> dict:
         return job
 
     problems = []
+    if (job.get('options') or {}).get('motion_type', 'general') not in motion_processing.PRESETS:
+        problems.append('motion_type 必须为 general、walk、run、attack 或 idle')
 
     if not job.get("job_id"):
         problems.append("缺少 job_id")

@@ -18,6 +18,7 @@ PREVIEW_LONG_SIDE = 960
 CAPTURE_FIELDS = (
     "source_type", "capture_profile", "frame_start", "frame_end", "target_fps",
     "include_hands", "smoothing_strength", "foot_lock_strength", "root_motion",
+    'motion_type',
 )
 
 # Actual detector topologies; synthetic standard-skeleton joints are not detections.
@@ -60,7 +61,7 @@ def source_matches(expected, path, relocated=False):
 
 
 def settings_snapshot(props):
-    return {key: getattr(props, key) for key in CAPTURE_FIELDS}
+    return {key: getattr(props, key, 'general' if key == 'motion_type' else None) for key in CAPTURE_FIELDS}
 
 
 def signature(settings):
@@ -97,7 +98,10 @@ def action_frame(timestamp, start_time, scene_fps, image=False):
 def is_problem(row):
     if row.get("status") in ("missing", "interpolated", "low_confidence"):
         return True
-    return any(point[2] < skeleton.CONFIDENCE_LOW for point in row.get("body2d", []))
+    points = row.get('body2d', [])
+    if len(points) == 133:
+        points = points[:23]  # Face/finger output is outside this capture profile's scope.
+    return bool(row.get('unreliable') or row.get('unreliable_joints')) or any(point[2] < skeleton.CONFIDENCE_LOW for point in points)
 
 
 def next_problem(rows, current, direction):
@@ -118,9 +122,22 @@ def validate_manifest(data, result=None):
             raise ValueError("预览文件缺少素材或帧数据")
         if not data["frames"]:
             raise ValueError("预览没有帧")
+        diagnostics = data.get('diagnostics', {})
+        if not isinstance(diagnostics, dict) or any(not isinstance(diagnostics.get(k, {}), dict)
+                                                   for k in ('joints', 'contact_counts', 'contact_intervals')):
+            raise ValueError('诊断数据结构无效')
+        stage = data.get('stages', {}).get('raw')
+        if stage is not None:
+            if not isinstance(stage, dict) or stage.get('file') != 'mocap_raw.json':
+                raise ValueError('原始阶段引用无效')
+            digest = stage.get('sha256', '')
+            if not isinstance(digest, str) or len(digest) != 64 or any(c not in '0123456789abcdef' for c in digest):
+                raise ValueError('原始阶段校验值无效')
         previous_time, previous_source = -1.0, -1
         numbers = {f.frame for f in result.frames} if result else None
         for row in data["frames"]:
+            if any(state not in ('contact', 'air', 'unknown') for state in row.get('contact_states', {}).values()):
+                raise ValueError('接触状态无效')
             source_index, timestamp = row["source_index"], row["time"]
             if type(source_index) is not int or source_index < 0 or source_index <= previous_source:
                 raise ValueError("源帧编号必须递增")
@@ -178,6 +195,7 @@ class ReviewState:
         self.result = result
         self.manifest = manifest
         self.settings = dict(settings)
+        self.settings.setdefault('motion_type', 'general')
         self.source = dict(manifest["source"]) if manifest else fingerprint(source_path)
         self.source_path = source_path
         self.relocated = False
@@ -193,7 +211,9 @@ class ReviewState:
         self.revision += 1
 
     def matches(self, settings, path):
-        return not self.stale and settings_equal(self.settings, settings) and paths.normalize(path) == paths.normalize(self.source_path)
+        current = dict(settings)
+        current.setdefault('motion_type', 'general')
+        return not self.stale and settings_equal(self.settings, current) and paths.normalize(path) == paths.normalize(self.source_path)
 
     def media_matches(self):
         return source_matches(self.source, self.source_path, self.relocated)

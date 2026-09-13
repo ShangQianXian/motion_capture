@@ -18,6 +18,7 @@ DETECTOR_CONFIG = "config_rtmdet_m_person"
 
 #: Manifest artifact ids per profile for the 2D body model.
 BODY2D_ARTIFACTS = {
+    'quality_feet': ('rtmpose_m_wholebody', 'config_rtmpose_m_wholebody'),
     "quality": ("rtmpose_m_body", "config_rtmpose_m_body"),
     "quality_plus": ("rtmpose_x_body", "config_rtmpose_x_body"),
     "fallback_cpu": ("rtmpose_m_body", "config_rtmpose_m_body"),

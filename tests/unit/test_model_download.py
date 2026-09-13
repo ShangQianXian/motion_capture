@@ -45,7 +45,9 @@ class ModelDownloadTests(unittest.TestCase):
         self.assertEqual(len(plus), 8)
         self.assertEqual(quality[0]['id'], 'config_rtmdet_m_person')
         self.assertTrue({a['id'] for a in quality}.issubset({a['id'] for a in plus}))
-        self.assertEqual(len(select_artifacts(self.manifest, all_models=True)), 19)
+        self.assertEqual(len(select_artifacts(self.manifest, all_models=True)), 21)
+        feet = {a['id'] for a in select_artifacts(self.manifest, ['quality_feet'])}
+        self.assertTrue({'rtmpose_m_wholebody', 'config_rtmpose_m_wholebody', 'motionbert_body3d', 'rtmdet_m_person'} <= feet)
 
     def test_explicit_model_always_includes_its_config(self):
         artifacts = select_artifacts(self.manifest, artifact_ids=['rtmpose_x_body'])

@@ -116,6 +116,7 @@ STATUS_LABELS = {
 }
 
 PROFILE_LABELS = {
+    'quality_feet': '身体与脚部增强（WholeBody）',
     "preview": "快速捕捉（MediaPipe）",
     "quality": "Quality（RTMPose + MotionBERT）",
     "quality_plus": "Quality Plus（RTMPose-x）",

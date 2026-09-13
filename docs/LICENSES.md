@@ -1,5 +1,23 @@
 # 第三方许可证核查清单
 
+## v0.3 核查记录（2026-09-12）
+
+本节是 v0.3 当前状态，下面历史清单的空白项不代表已经获得授权。安装包不含模型权重及下载的第三方 Python 配置。
+
+| 组件／权重 | 已核实的范围 | v0.3 状态 |
+|---|---|---|
+| RTMPose-m WholeBody，`rtmpose_m_wholebody` | MMPose 代码／配置 Apache-2.0；权重来自官方模型目录，训练使用 COCO-WholeBody／AIC／COCO | 特定权重的商业授权未确认，不能标注“可商用” |
+| RTMDet-m Person、RTMPose-m／x Body | OpenMMLab 代码采用 Apache-2.0；使用清单固定的官方权重 | 代码许可不代替具体权重及训练数据授权，商业状态未确认 |
+| MotionBERT H36M | 原项目和 MMPose 实现的代码 Apache-2.0；实际使用 OpenMMLab H36M 微调权重 | H36M 数据及衍生权重需单独核实，商业状态未确认 |
+| MediaPipe Pose Full／Heavy／Lite、Hand | 保留 Google 官方模型来源，运行时未捆绑 | 本次未取得针对这些具体权重的独立商业授权确认 |
+| VideoPose3D、Hand5、InterNet、手检测器等清单可选权重 | 保留原来源；v0.3 未新增或启用这些三维／手部链路 | 保持待核查，不作可商用承诺 |
+
+官方依据：[MMPose 许可证](https://github.com/open-mmlab/mmpose/blob/v1.3.2/LICENSE)、[MMDetection 许可证](https://github.com/open-mmlab/mmdetection/blob/main/LICENSE)、[MotionBERT 许可证](https://github.com/Walter0807/MotionBERT/blob/main/LICENSE)、[WholeBody 模型目录](https://github.com/open-mmlab/mmpose/blob/main/configs/wholebody_2d_keypoint/rtmpose/coco-wholebody/rtmpose_coco-wholebody.yml)。
+
+[COCO-WholeBody 官方使用条款](https://github.com/jin-s13/COCO-WholeBody#terms-of-use)明确说明数据集用于研究及非商业用途，商业使用其标注需联系授权。这里记录数据集条款，不推断它自动等同于所有衍生权重的许可；因此新档位保持“商业授权未确认”。未接入 GVHMR、WHAM，也未接受它们的模型许可。
+
+新 WholeBody 权重校验值来自本机从固定官方 URL 下载的文件，用于版本固定及后续完整性校验，不是发布者签名。运行时、旧权重和插件自身许可证仍需由发布者完成商业发行核查；本地开发安装包不构成商业授权证明。
+
 对应 `docs/DEVELOPMENT_GUIDE.md` §13.3 与 `docs/TECHNICAL_DESIGN.md` §11。
 
 ## 1. 基本原则

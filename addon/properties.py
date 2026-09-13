@@ -124,6 +124,14 @@ class MotionCaptureSceneProperties(bpy.types.PropertyGroup):
 
     # -- options -----------------------------------------------------------------------
 
+    motion_type: EnumProperty(name='动作类型', description='只调整处理策略，不用动作模板替换素材',
+        items=(('general', '通用／混合', '保守处理，适用于混合动作'), ('walk', '走路', '保留交替支撑和摆腿'),
+               ('run', '跑步', '允许腾空和快速换脚'), ('attack', '攻击', '保留蓄力、快速动作和急停'),
+               ('idle', '待机', '保留呼吸与细微重心变化')), default='general', update=_capture_changed)
+
+    preview_stage: EnumProperty(name='三维阶段', items=(('processed', '处理后', '待应用的最终结果'),
+        ('raw', '原始三维', '模型原始输出，只用于诊断')), default='processed', update=_correction_changed)
+
     include_hands: BoolProperty(
         update=_capture_changed,
         name=ui_text.PROP_INCLUDE_HANDS,

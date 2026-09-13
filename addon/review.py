@@ -52,6 +52,7 @@ class Session:
         self.last_clock = time.monotonic()
         self.rows = []
         self.pose_frames = {}
+        self.raw_result = None
         self.pose_bounds = ((0, 0, .9), 1.5, 1.8)
         self.view = None
         self.suspend = False
@@ -248,7 +249,10 @@ class Session:
             if not self.state.matches(preview.settings_snapshot(self.props), self.source_path()):
                 self.state.invalidate()
             result = self.state.corrected(self.props.pitch_correction, self.props.flip_x)
-            if self.settings_key != self.state.correction or not self.pose_frames:
+            key = (self.state.correction, self.props.preview_stage)
+            if self.settings_key != key or not self.pose_frames:
+                if self.props.preview_stage == 'raw' and self.raw_result:
+                    result = preview.corrected_result(self.raw_result, self.props.pitch_correction, self.props.flip_x)
                 self.pose_frames = {frame.frame: frame for frame in result.frames}
                 first = result.frames[0].body3d['pelvis']
                 low, high = [float('inf')] * 3, [float('-inf')] * 3
@@ -262,7 +266,7 @@ class Session:
                 self.pose_bounds = (tuple((a + b) / 2 for a, b in zip(low, high)),
                                     max(.2, math.hypot(high[0] - low[0], high[1] - low[1])),
                                     max(.2, high[2] - low[2]))
-                self.settings_key = self.state.correction
+                self.settings_key = key
         if self.view and self.props.preview_playing and self.pending_id is None and self.displayed_sample >= 0:
             index = self.displayed_sample
             row = self.row(index)
@@ -302,6 +306,21 @@ def frame_changed(props, context):
 def load_result(scene, path, restore_settings=False):
     result = result_schema.load_mocap_result(bpy.path.abspath(path))
     manifest = preview.load_manifest(result)
+    raw_result = None
+    if manifest and manifest.get('stages', {}).get('raw'):
+        import hashlib
+        stage = manifest['stages']['raw']
+        filename = stage['file']
+        if filename != os.path.basename(filename) or filename != 'mocap_raw.json':
+            raise errors.MocapError(errors.RESULT_SCHEMA_INVALID, '原始三维文件引用无效。')
+        stage_path = os.path.join(os.path.dirname(result.path), filename)
+        try:
+            with open(stage_path, 'rb') as handle:
+                if hashlib.sha256(handle.read()).hexdigest() != stage['sha256']:
+                    raise ValueError('checksum')
+            raw_result = result_schema.load_mocap_result(stage_path)
+        except (OSError, ValueError) as exc:
+            raise errors.MocapError(errors.RESULT_SCHEMA_INVALID, '原始三维阶段文件丢失或损坏。') from exc
     value = session(scene)
     props = scene.mocap_props
     if value.view:
@@ -309,6 +328,7 @@ def load_result(scene, path, restore_settings=False):
     value.suspend = True
     try:
         if restore_settings:
+            props.motion_type = 'general'
             for name, setting in (manifest or {}).get("capture_settings", {}).items():
                 if name in preview.CAPTURE_FIELDS:
                     setattr(props, name, setting)
@@ -318,10 +338,12 @@ def load_result(scene, path, restore_settings=False):
         props.pitch_correction = 0.0
         props.preview_frame = 1
         props.preview_playing = False
+        props.preview_stage = 'processed'
     finally:
         value.suspend = False
     settings = (manifest or {}).get("capture_settings") or preview.settings_snapshot(props)
     value.state = preview.ReviewState(result, manifest, settings, value.source_path())
+    value.raw_result = raw_result
     if paths.normalize(result.source_path) != value.source_path():
         if preview.source_matches(value.state.source, value.source_path(), relocated=True):
             value.state.relocated = True
@@ -347,6 +369,7 @@ def begin_capture(scene):
     if value.view:
         value.view.finish()
     value.state = None
+    value.raw_result = None
     value.rows = []
     value.pose_frames = {}
     value.auto_loaded = ""
@@ -362,6 +385,8 @@ def apply_block_reason(scene):
         return "请等待当前任务完成。"
     if state is None:
         return "请先生成或加载动捕结果。"
+    if props.preview_stage != 'processed':
+        return '请切换到处理后结果，核对最终动作再应用。'
     if not state.matches(preview.settings_snapshot(props), value.source_path()):
         return "素材或捕捉参数已改变，请重新生成。"
     if not state.media_matches():

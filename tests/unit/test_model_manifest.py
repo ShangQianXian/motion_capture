@@ -28,7 +28,7 @@ class TestBundledManifest(unittest.TestCase):
         self.assertEqual(manifest.source_path, paths.bundled_manifest_path())
         self.assertEqual(manifest.schema_version, "0.1")
         self.assertTrue(manifest.manual_download_only)
-        self.assertEqual(len(manifest.artifacts), 19)
+        self.assertEqual(len(manifest.artifacts), 21)
 
     def test_every_artifact_has_the_required_fields(self):
         manifest = model_manifest.load_manifest("")

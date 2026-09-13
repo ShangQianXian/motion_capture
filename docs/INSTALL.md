@@ -8,7 +8,7 @@
 
 ### 1.1 使用发布包
 
-1. 用 `tools\build_zip.ps1` 生成（或从发布页下载）`motion_capture-0.2.0.zip`。
+1. 用 `tools\build_zip.ps1` 生成（或从发布页下载）`motion_capture-0.3.0.zip`。
 2. Blender → `Edit > Preferences > Add-ons > Install from Disk`，选择该 zip。
 3. 在列表中勾选 **Motion Capture for Rigify**。
 4. 侧边栏出现 `Mocap` 标签（View3D 中按 `N` 打开侧边栏）。

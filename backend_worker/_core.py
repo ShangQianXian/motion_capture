@@ -21,6 +21,7 @@ from __future__ import annotations
 _NESTED = bool(__package__) and "." in __package__
 
 if _NESTED:  # imported as motion_capture.backend_worker._core (inside Blender)
+    from ..core import motion_processing
     from ..core import errors  # noqa: F401
     from ..core import job_schema  # noqa: F401
     from ..core import model_manifest  # noqa: F401
@@ -32,6 +33,7 @@ if _NESTED:  # imported as motion_capture.backend_worker._core (inside Blender)
     from ..core import smoothing  # noqa: F401
     from ..core import preview  # noqa: F401
 else:  # imported as backend_worker._core (worker process)
+    from core import motion_processing
     from core import errors  # noqa: F401
     from core import job_schema  # noqa: F401
     from core import model_manifest  # noqa: F401
@@ -44,6 +46,7 @@ else:  # imported as backend_worker._core (worker process)
     from core import preview  # noqa: F401
 
 __all__ = [
+    'motion_processing',
     "errors",
     "job_schema",
     "model_manifest",

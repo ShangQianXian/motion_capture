@@ -98,6 +98,18 @@ class PreviewTests(unittest.TestCase):
         output, _ = postprocess.postprocess(frames, 30, {'smoothing_strength': 0})
         self.assertIn('elbow.L', output[2]['interpolated_joints'])
 
+    def test_v03_optional_stages_and_invalid_references(self):
+        data = dict(version='0.2', source={}, frames=[dict(source_index=0, time=0., contact_states={'L':'air'})],
+                    stages={'raw': {'file':'mocap_raw.json', 'sha256':'a' * 64}})
+        preview.validate_manifest(data)
+        for stage in ({'file':'../other.json','sha256':'a' * 64}, {'file':'mocap_raw.json','sha256':'broken'}):
+            with self.assertRaises(errors.MocapError):
+                preview.validate_manifest(dict(data, stages={'raw':stage}))
+        with self.assertRaises(errors.MocapError):
+            preview.validate_manifest(dict(data, diagnostics=[]))
+        points = [[0, 0, .9]] * 23 + [[0, 0, .1]] * 110
+        self.assertFalse(preview.is_problem(dict(body2d=points)))
+
     def test_consecutive_missing_rows_and_legacy_image(self):
         rows = [dict(source_index=i * 3, time=4 + i / 20, status='missing' if 1 <= i <= 3 else 'detected')
                 for i in range(5)]

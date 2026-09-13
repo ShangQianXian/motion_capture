@@ -1,8 +1,13 @@
-# Motion Capture for Rigify (v0.2.0)
+# Motion Capture for Rigify (v0.3.0)
+
+当前为开发验收包：功能与回归已完成，四类动作的端到端识别质量仍有未通过项，详见 [验收记录](docs/V0_3_VALIDATION.md)。
 
 从视频或图片捕捉单人全身动作，并重定向到 Blender **Rigify Human 生成 rig**，输出可编辑的 Blender Action。
 
-**选择素材 → 生成动捕 → 对照核对 → 确认并应用。** v0.2 提供素材缩略图、实际二维检测叠加、可旋转三维骨架和独立预览时间轴。只有显示过当前匹配结果，才能创建从第 1 帧开始的新 Action；原 Action 保留，支持撤销。
+**选择素材 → 生成动捕 → 对照核对 → 确认并应用。** v0.3 增加通用／混合、走路、跑步、攻击、待机预设，身体与脚部增强模型档位，以及原始／处理后三维切换。预设处理上传动作，不替换成动作模板。只有显示过当前匹配的最终结果，才能创建从第 1 帧开始的新 Action；原 Action 保留，支持撤销。
+
+- [v0.3 操作、素材准备与接口](docs/V0_3_MOTION.md)
+- [v0.3 验证记录与限制](docs/V0_3_VALIDATION.md)
 
 - [v0.2 操作说明与接口](docs/V0_2_REVIEW.md)
 - [v0.2 验证记录](docs/V0_2_VALIDATION.md)

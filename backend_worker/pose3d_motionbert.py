@@ -10,6 +10,8 @@ Cannot be exercised without the OpenMMLab stack and the MotionBERT weights; see
 
 from __future__ import annotations
 
+import math
+
 from ._core import errors, model_manifest, skeleton
 from ._core import retarget_math as rm
 
@@ -108,12 +110,18 @@ def _prepare_motionbert_inference_pipeline(model) -> None:
     """Adapt only this model's MotionBERT encoder; leave package/config files intact."""
     dataset = model.cfg.test_dataloader.dataset
     pipeline = []
+    def prepare(data):
+        data = _align_motionbert_targets(data)
+        scores = getattr(model, '_mocap_input_scores', None)
+        if scores is not None:
+            data['keypoints_visible'] = scores.copy()
+        return data
     for transform in dataset.pipeline:
         if (isinstance(transform, dict) and transform.get("type") == "GenerateTarget"
                 and isinstance(transform.get("encoder"), dict)
                 and transform["encoder"].get("type") == "MotionBERTLabel"):
             if not pipeline or pipeline[-1] is not _align_motionbert_targets:
-                pipeline.append(_align_motionbert_targets)
+                pipeline.append(prepare)
         pipeline.append(transform)
     dataset.pipeline = pipeline
 
@@ -172,7 +180,8 @@ class Body3DLifter(object):
             samples.append([sample])
         return samples
 
-    def lift(self, keypoints_seq, scores_seq, image_size=None, bboxes_seq=None, cancel_token=None):
+    def lift(self, keypoints_seq, scores_seq, image_size=None, bboxes_seq=None, cancel_token=None,
+             sample_fps=30., max_gap_seconds=.2):
         """Lift a 2D sequence into ``(frames, 17, 3)`` root-relative coordinates."""
         numpy = mm.require_numpy()
         if len(keypoints_seq) == 0:
@@ -186,8 +195,22 @@ class Body3DLifter(object):
         valid = [index for index, sample in enumerate(samples) if sample]
         if not valid:
             raise errors.MocapError(errors.NO_PERSON_DETECTED, "没有可提升的二维姿态。")
-        # Preserve interior gaps for MMPose's track-aware temporal collator.
-        first, last = valid[0], valid[-1]
+        # Keep the sampling grid, interpolate only bounded short gaps, and prevent
+        # the model's receptive field from reaching across a long occlusion.
+        bounds = {}
+        segments = [[valid[0]]]
+        for a, b in zip(valid, valid[1:]):
+            if (b - a - 1) / sample_fps > max_gap_seconds + 1e-7:
+                segments.append([])
+            else:
+                for missing in range(a + 1, b):
+                    fraction = (missing - a) / (b - a)
+                    points = numpy.asarray(keypoints_seq[a]) * (1 - fraction) + numpy.asarray(keypoints_seq[b]) * fraction
+                    samples[missing] = self._to_samples([points], [numpy.zeros(17)])[0]
+            segments[-1].append(b)
+        for segment in segments:
+            for index in segment:
+                bounds[index] = (segment[0], segment[-1])
         window = int(self.model.cfg.model.backbone.get("seq_len", WINDOW_SIZE))
         if window <= 0 or window % 2 == 0:
             raise errors.MocapError(errors.CONFIG_MISSING, "MotionBERT 时间窗口必须为正奇数。")
@@ -201,11 +224,13 @@ class Body3DLifter(object):
         for index in valid:
             if cancel_token is not None and cancel_token.cancelled():
                 raise errors.MocapError(errors.CANCELLED, "MotionBERT 推理已取消。")
+            first, last = bounds[index]
             temporal = [samples[max(first, min(last, index + (offset - target_index) * step))]
                         for offset in range(window)]
+            self.model._mocap_input_scores = numpy.stack([sample[0].pred_instances.keypoint_scores[0] for sample in temporal])
             try:
                 results = self._inference(self.model, temporal, with_track_id=True,
-                                          image_size=image_size, norm_pose_2d=True)
+                                          image_size=image_size, norm_pose_2d=False)
             except Exception as exc:
                 if mm.is_cuda_oom(exc):
                     raise mm.oom_error("MotionBERT 推理", self.device)
@@ -311,3 +336,26 @@ def ground_and_stand(body3d: dict) -> dict:
         return body3d
     offset = (0.0, 0.0, -min(heights))
     return {name: rm.vec_add(value, offset) for name, value in body3d.items()}
+
+
+def refine_feet_from_2d(body, points, image_size=(1, 1)):
+    """Constrain foot image-plane direction; depth remains an explicitly estimated prior."""
+    if len(points) < 23:
+        return
+    # Normalize against shoulder width instead of treating pixels as metric measurements.
+    aspect = image_size[1] / image_size[0]
+    width_2d = math.hypot(points[5][0] - points[6][0], (points[5][1] - points[6][1]) * aspect)
+    if width_2d < .025 or min(points[5][2], points[6][2]) < .5:
+        return
+    scale = rm.vec_distance(body['shoulder.L'], body['shoulder.R']) / width_2d
+    for side, ankle_index, toe_index, heel_index in (('L', 15, 17, 19), ('R', 16, 20, 22)):
+        ankle, toe = body['ankle.' + side], body['toe.' + side]
+        if min(points[ankle_index][2], points[toe_index][2], points[heel_index][2]) < .5:
+            continue
+        prior = rm.vec_sub(toe, ankle)
+        length = max(.05, rm.vec_length(prior))
+        dx = max(-length * .95, min(length * .95, (points[toe_index][0] - points[heel_index][0]) * scale * .7))
+        dz = max(-length * .5, min(length * .5, -(points[toe_index][1] - points[heel_index][1]) * aspect * scale * .7))
+        dy = math.copysign(math.sqrt(max(.001, length * length - dx * dx - dz * dz)), prior[1])
+        direction = rm.vec_scale(rm.vec_normalize((dx, dy, dz)), length)
+        body['toe.' + side] = rm.vec_add(ankle, direction)

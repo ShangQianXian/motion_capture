@@ -11,7 +11,7 @@ param(
     [string] $PythonExe,
     [string] $ModelsRoot,
     [string] $Manifest,
-    [ValidateSet('preview', 'quality', 'quality_plus', 'fallback_cpu', 'hand_enhanced')]
+    [ValidateSet('preview', 'quality', 'quality_plus', 'quality_feet', 'fallback_cpu', 'hand_enhanced')]
     [string[]] $Profile = @(),
     [string[]] $Artifact = @(),
     [switch] $All,

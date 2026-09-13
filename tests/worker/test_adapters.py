@@ -78,6 +78,51 @@ class AdapterShapes(unittest.TestCase):
             self.lifter(None).lift([np.ones((17, 2))], [np.ones(17)], (640, 480), cancel_token=token)
         self.assertEqual(caught.exception.code, errors.CANCELLED)
 
+    def test_long_occlusion_cuts_receptive_field(self):
+        seen = []
+        def inference(model, temporal, **kwargs):
+            values = [float(s[0].pred_instances.keypoints[0, 0, 0]) for s in temporal]
+            seen.append(values)
+            self.assertFalse(kwargs['norm_pose_2d'])
+            return prediction(np.ones((1, 17, 3), dtype=np.float32))
+        points = [np.zeros((17, 2)), None, None, None, np.ones((17, 2)) * 100]
+        self.lifter(inference, 5).lift(points, [np.ones(17), None, None, None, np.ones(17)], (640, 480), sample_fps=10)
+        self.assertEqual(seen, [[0.] * 5, [100.] * 5])
+
+    def test_wholebody_initialization_does_not_fall_back(self):
+        from backend_worker import pipeline, pose2d_mmpose
+        from unittest.mock import Mock
+        with patch.object(pose2d_mmpose, 'resolve_device', return_value='cpu'), patch.object(pose2d_mmpose, 'PersonDetector'), \
+                patch.object(pose2d_mmpose, 'Body2DEstimator', side_effect=errors.MocapError(errors.MODEL_MISSING, 'missing')) as estimator:
+            with self.assertRaises(errors.MocapError):
+                pipeline._run_mmpose({}, 'quality_feet', {}, Mock(), None, {})
+            estimator.assert_called_once()
+
+    def test_crop_reads_neighboring_context_but_exports_selected_samples(self):
+        from backend_worker import pipeline, pose2d_mmpose, pose3d_motionbert, media_decode
+        from unittest.mock import Mock
+        indexes = (0, 120, 121, 122, 123, 124, 245)
+        decoded = [SimpleNamespace(index=i, source_index=28+i, timestamp=(28+i)/24, width=640, height=480,
+                                   image=np.zeros((480,640,3),dtype=np.uint8)) for i in indexes]
+        source = Mock(fps=24., native_fps=24., width=640, height=480, native_total=400, total_frames=246, media_type='video')
+        source.__iter__ = Mock(return_value=iter(decoded))
+        body2d = Mock()
+        body2d.estimate.return_value = (np.arange(34).reshape(17,2), np.ones(17))
+        options = {'motion_type':'attack'}
+        with patch.object(pose2d_mmpose, 'resolve_device', return_value='cpu'), patch.object(pose2d_mmpose, 'PersonDetector'), \
+                patch.object(pose2d_mmpose, 'Body2DEstimator', return_value=body2d), \
+                patch.object(media_decode, 'open_media', return_value=source) as opened, \
+                patch.object(pose3d_motionbert, 'Body3DLifter') as lifter:
+            lifter.return_value.lift.return_value = np.tile(np.arange(51).reshape(17,3),(len(indexes),1,1))
+            frames, fps, _, _ = pipeline._run_mmpose({'input':dict(path='fixture.mp4',frame_start=150,frame_end=152)},
+                                                     'quality',{},Mock(),None,options)
+            self.assertEqual(opened.call_args.args[3:5], (29,273))
+            self.assertEqual([f['frame'] for f in frames], [150,151,152])
+            self.assertEqual([r['source_index'] for r in options['_preview_rows']], [149,150,151])
+            self.assertEqual(lifter.return_value.lift.call_args.kwargs['max_gap_seconds'], .1)
+            self.assertEqual(lifter.return_value.lift.call_args.kwargs['sample_fps'],24)
+            self.assertAlmostEqual(frames[0]['time'],149/24)
+
     def test_quality_plus_initialization_falls_back_to_quality(self):
         from unittest.mock import Mock
         from backend_worker import pipeline, media_decode, pose2d_mmpose
@@ -89,7 +134,7 @@ class AdapterShapes(unittest.TestCase):
                 patch.object(pose2d_mmpose, "Body2DEstimator", side_effect=[
                     errors.MocapError(errors.CUDA_OOM, "out of memory"), Mock()]) as estimator, \
                 patch.object(media_decode, "open_media", return_value=source):
-            frames, fps, warnings, profile = pipeline._run_mmpose({}, "quality_plus", {}, reporter, None, {})
+            frames, fps, warnings, profile = pipeline._run_mmpose({'input': {'path': 'fixture.mp4'}}, "quality_plus", {}, reporter, None, {})
         self.assertEqual([call.args[1] for call in estimator.call_args_list], ["quality_plus", "quality"])
         self.assertEqual(profile, "quality")
         self.assertEqual(warnings[0]["code"], pipeline.CODE_PROFILE_FALLBACK)

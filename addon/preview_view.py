@@ -219,7 +219,7 @@ class MOCAP_OT_open_preview(bpy.types.Operator):
         box(self.right_rect, PANE)
         label("素材与动作核对", margin, height - 28, 18)
         label("原素材 / 二维识别关键点", margin, height - 57, 14)
-        label("三维待应用动作", self.right_rect[0], height - 57, 14)
+        label("原始三维（诊断）" if props.preview_stage == 'raw' else "三维待应用动作", self.right_rect[0], height - 57, 14)
         self.buttons = []
         self.button("关闭 · Esc", (width - 108, height - 38, 90, 27), "close")
         row = value.row(value.displayed_sample) if value.displayed_sample >= 0 else None
@@ -234,7 +234,7 @@ class MOCAP_OT_open_preview(bpy.types.Operator):
         if frame:
             self.draw_3d(frame, self.right_rect)
             state = value.state
-            if (value.image is not None and state and not state.stale and state.media_matches()
+            if (props.preview_stage == 'processed' and value.image is not None and state and not state.stale and state.media_matches()
                     and state.matches(preview.settings_snapshot(props), value.source_path())
                     and state.correction == (float(props.pitch_correction), bool(props.flip_x))):
                 state.viewed = True
@@ -250,6 +250,11 @@ class MOCAP_OT_open_preview(bpy.types.Operator):
         self.button("正面", (rx + 8, height - 107, 52, 26), "front")
         self.button("侧面", (rx + 64, height - 107, 52, 26), "side")
         self.button("复位", (rx + 120, height - 107, 52, 26), "reset")
+        if value.raw_result:
+            self.button('处理后' if props.preview_stage == 'raw' else '原始', (rx + 176, height - 107, 65, 26), 'stage')
+        if row and row.get('contact_states'):
+            names = {'contact': '支撑', 'air': '离地', 'unknown': '未知'}
+            label('L {0} / R {1}'.format(*(names.get(row['contact_states'].get(s), '未知') for s in ('L', 'R'))), rx, 111, 12, MUTED)
         if value.state and not value.state.manifest:
             label("旧版 / Mock 结果：无二维检测数据", margin, 111, 12, MUTED)
         elif row:
@@ -269,8 +274,12 @@ class MOCAP_OT_open_preview(bpy.types.Operator):
         total = value.total()
         if total > 1:
             for index, candidate in enumerate(value.rows):
+                x = margin + index / max(1, total - 1) * self.timeline[2]
+                for lane, side in enumerate(('L', 'R')):
+                    contact = candidate.get('contact_states', {}).get(side, 'unknown')
+                    colors = {'contact': ACCENT, 'air': LEFT, 'unknown': MUTED}
+                    box((x, 62 - lane * 4, max(2, self.timeline[2] / total), 3), colors.get(contact, MUTED))
                 if preview.is_problem(candidate):
-                    x = margin + index / max(1, total - 1) * self.timeline[2]
                     box((x, 71, 2, 9), LOW)
         fraction = max(0, value.displayed_sample) / max(1, total - 1)
         dot((margin + fraction * self.timeline[2], 75), LEFT, 6)
@@ -288,12 +297,14 @@ class MOCAP_OT_open_preview(bpy.types.Operator):
 
     def draw_2d(self, row, fit):
         points = row.get("body2d", [])
+        topology = (self.value.state.manifest or {}).get("topology")
+        if topology == 'coco_wholebody133':
+            points = points[:23]  # Body and feet; no face/hand feature was requested.
         if not points:
             return
         x, y, width, height = fit
         coords = [(x + p[0] * width, y + (1 - p[1]) * height) for p in points]
-        topology = (self.value.state.manifest or {}).get("topology")
-        left_ids = {1, 3, 5, 7, 9, 11, 13, 15} if topology == 'coco17' else {1, 2, 3, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31}
+        left_ids = {1, 3, 5, 7, 9, 11, 13, 15, 17, 18, 19} if topology in ('coco17', 'coco_wholebody133') else {1, 2, 3, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31}
         def color(index):
             return LOW if points[index][2] < 0.4 else (LEFT if index in left_ids else RIGHT)
         for a, b in self.value.state.manifest.get("edges", []):
@@ -373,6 +384,8 @@ class MOCAP_OT_open_preview(bpy.types.Operator):
             props.preview_speed = speeds[(speeds.index(props.preview_speed) + 1) % 3]
         elif command == 'loop':
             props.preview_loop = not props.preview_loop
+        elif command == 'stage':
+            props.preview_stage = 'raw' if props.preview_stage == 'processed' else 'processed'
         elif command in ('front', 'side', 'reset'):
             self.yaw = math.pi / 2 if command == 'side' else 0.0
             self.pitch = 0.18 if command == 'reset' else 0.0

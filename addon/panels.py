@@ -164,6 +164,7 @@ class MOCAP_PT_capture(_MocapPanel):
         is_image = props.source_type == 'image' or (props.source_type == 'auto' and paths.guess_media_type(props.source_media) == 'image')
 
         if not is_image:
+            column.prop(props, 'motion_type')
             row = column.row(align=True)
             row.prop(props, "frame_start")
             row.prop(props, "frame_end")
@@ -232,6 +233,23 @@ class MOCAP_PT_preview(_MocapPanel):
             layout.label(text='生成结果后，在这里核对动作。', icon='INFO')
             return
         layout.operator('mocap.open_preview', icon='IMAGE_DATA')
+        if value.raw_result:
+            layout.prop(props, 'preview_stage', expand=True)
+        if value.state.manifest and value.state.manifest.get('diagnostics'):
+            diagnostics = value.state.manifest['diagnostics']
+            counts = diagnostics.get('contact_counts', {})
+            if counts:
+                layout.label(text='脚部接触帧 L {0} / R {1}'.format(counts.get('L', {}).get('contact', 0), counts.get('R', {}).get('contact', 0)))
+            if diagnostics.get('support_events'):
+                layout.label(text='支撑事件 L {0} / R {1}'.format(*(diagnostics['support_events'].get(s, 0) for s in ('L', 'R'))))
+            if not diagnostics.get('root_trajectory_available', True):
+                layout.label(text='根相对结果：无真实水平轨迹', icon='INFO')
+            for name in ('ankle.L', 'ankle.R', 'wrist.L', 'wrist.R'):
+                joint = diagnostics.get('joints', {}).get(name, {})
+                if joint.get('amplitude_ratio') is not None:
+                    layout.label(text='{0} 幅度比 {1:.2f} / 偏移 {2} 帧'.format(name, joint['amplitude_ratio'], joint.get('lag_frames')))
+            if diagnostics.get('joints'):
+                layout.label(text='幅度比比较处理前后，不是识别准确率', icon='INFO')
         layout.prop(props, 'preview_overlay')
         if value.info.get('type') != 'image':
             row = layout.row(align=True)

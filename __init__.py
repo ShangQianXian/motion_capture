@@ -14,7 +14,7 @@ from __future__ import annotations
 bl_info = {
     "name": "Motion Capture for Rigify",
     "author": "Project Team",
-    "version": (0, 2, 0),
+    "version": (0, 3, 0),
     "blender": (4, 5, 0),
     "location": "View3D > Sidebar > Mocap",
     "description": "Capture body motion from video or image and retarget it to Rigify rigs.",
@@ -34,6 +34,7 @@ _RELOADABLE = (
     "core.skeleton",
     "core.retarget_math",
     "core.smoothing",
+    "core.motion_processing",
     "core.job_schema",
     "core.result_schema",
     "core.pose_calibration",

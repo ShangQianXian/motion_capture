@@ -8,6 +8,7 @@ installation with no inference dependencies at all.
 from __future__ import annotations
 
 import os
+import copy
 import platform
 import sys
 
@@ -32,7 +33,7 @@ OPTIONAL_MODULES = (
 MEDIAPIPE_PROFILES = ("preview", "fallback_cpu")
 
 #: Profiles served by the MMPose + MotionBERT backend.
-MMPOSE_PROFILES = ("quality", "quality_plus")
+MMPOSE_PROFILES = ("quality", "quality_plus", 'quality_feet')
 
 #: Warning codes emitted by this module.
 CODE_PROFILE_FALLBACK = "PROFILE_FALLBACK"
@@ -157,6 +158,9 @@ def run_job(job: dict, reporter, cancel_token=None, mock: bool = False) -> str:
     mode = str(job.get("mode") or job_schema.MODE_CAPTURE)
     model_section = job.get("model") or {}
     options = dict(job.get("options") or {})
+    options.setdefault('processing_version', '0.3')
+    options.setdefault('motion_type', 'general')
+    options['coordinate_space'] = 'root_relative'
     options["_preview_rows"] = []
     input_section = job.get("input") or {}
     output_section = job.get("output") or {}
@@ -216,7 +220,13 @@ def run_job(job: dict, reporter, cancel_token=None, mock: bool = False) -> str:
             details={"path": str(input_section.get("path") or "")},
         )
 
+    raw_frames = copy.deepcopy(frames)
     frames, post_warnings = postprocess.postprocess(frames, fps, options, reporter)
+    if profile in MMPOSE_PROFILES:
+        torch = sys.modules.get('torch')
+        if torch is not None and torch.cuda.is_available():
+            options.setdefault('_diagnostics', {})['cuda_peak_allocated_mib'] = round(torch.cuda.max_memory_allocated() / 1024 ** 2, 2)
+            options['_diagnostics']['cuda_peak_reserved_mib'] = round(torch.cuda.max_memory_reserved() / 1024 ** 2, 2)
     warnings = list(warnings) + list(post_warnings)
     if not preview.source_matches(source_identity, input_section['path']):
         raise errors.MocapError(errors.MEDIA_OPEN_FAILED, '素材在捕捉期间已改变，请重新生成。')
@@ -237,7 +247,8 @@ def run_job(job: dict, reporter, cancel_token=None, mock: bool = False) -> str:
     for frame in result["frames"]:
         frame["interpolated_joints"] = flags.get(frame["frame"], [])
     preview_export.write(job, result, result_path, options["_preview_rows"],
-                         options.get("_preview_meta", {}), profile)
+                         options.get("_preview_meta", {}), profile, raw_frames=raw_frames,
+                         diagnostics=options.get('_diagnostics', {}))
     return result_path
 
 
@@ -420,6 +431,9 @@ def _run_mediapipe(job, profile, manifest, reporter, cancel_token, options) -> t
             normalized = getattr(detection, "pose_landmarks", None) or []
             if normalized:
                 row["body2d"] = preview_export.mp_points(normalized[0])
+                row['feet2d'] = {'L': [row['body2d'][31], row['body2d'][29]],
+                                 'R': [row['body2d'][32], row['body2d'][30]]}
+                row['pelvis2d'] = [(row['body2d'][23][axis] + row['body2d'][24][axis]) / 2 for axis in range(2)]
             if not world:
                 reporter.warning(
                     errors.NO_PERSON_DETECTED,
@@ -439,11 +453,10 @@ def _run_mediapipe(job, profile, manifest, reporter, cancel_token, options) -> t
                 if height > 0.2:
                     reference_scale = height / 0.35
 
-            offset = pose_mediapipe.standing_offset(body)
             drift, first_center = pose_mediapipe.horizontal_offset(
                 normalized[0] if normalized else None, reference_scale, first_center
             )
-            total_offset = (offset[0] + drift[0], offset[1] + drift[1], offset[2] + drift[2])
+            total_offset = (drift[0], drift[1], drift[2])
             body = {name: _translate(value, total_offset) for name, value in body.items()}
 
             hands = {}
@@ -523,17 +536,22 @@ def _run_mmpose(job, profile, manifest, reporter, cancel_token, options) -> tupl
         else:
             raise
 
+    requested_start = int(input_section.get('frame_start') or 1)
+    requested_end = int(input_section.get('frame_end') or 0)
+    video_context = media_decode.resolve_media_type(input_section.get('path', ''), input_section.get('type', 'auto')) == 'video'
+    context_start = max(1, requested_start - pose3d_motionbert.WINDOW_SIZE // 2) if video_context else requested_start
+    context_end = requested_end + pose3d_motionbert.WINDOW_SIZE // 2 if video_context and requested_end else requested_end
     source = media_decode.open_media(
         str(input_section.get("path") or ""),
         str(input_section.get("type") or "auto"),
         float(input_section.get("target_fps") or 30.0),
-        int(input_section.get("frame_start") or 1),
-        int(input_section.get("frame_end") or 0),
+        context_start,
+        context_end,
         cancel_token=cancel_token,
         reporter=reporter,
     )
 
-    frame_start = int(input_section.get("frame_start") or 1)
+    frame_start = context_start
     keypoints_seq = []
     options["_preview_meta"] = preview_export.source_meta(source)
     scores_seq = []
@@ -570,8 +588,11 @@ def _run_mmpose(job, profile, manifest, reporter, cancel_token, options) -> tupl
                     frame=frame_start + decoded.index,
                 )
                 continue
-            h36m_points, h36m_scores = pose2d_mmpose.coco17_to_h36m17(keypoints, keypoint_scores)
+            h36m_points, h36m_scores = pose2d_mmpose.coco17_to_h36m17(keypoints[:17], keypoint_scores[:17])
             row["body2d"] = preview_export.coco_points(keypoints, keypoint_scores, decoded.width, decoded.height)
+            row['pelvis2d'] = [(row['body2d'][11][axis] + row['body2d'][12][axis]) / 2 for axis in range(2)]
+            if len(row['body2d']) >= 23:
+                row['feet2d'] = {'L': row['body2d'][17:20], 'R': row['body2d'][20:23]}
             keypoints_seq.append(h36m_points)
             scores_seq.append(h36m_scores)
             bboxes_seq.append(bbox)
@@ -587,18 +608,24 @@ def _run_mmpose(job, profile, manifest, reporter, cancel_token, options) -> tupl
     _raise_if_cancelled(cancel_token)
     reporter.loading_model(profile=profile, model_id=pose3d_motionbert.LIFTER_WEIGHTS, fraction=0.7)
     lifter = pose3d_motionbert.Body3DLifter(models_root, device, manifest, reporter)
-    lifted = lifter.lift(keypoints_seq, scores_seq, image_size, bboxes_seq, cancel_token)
+    lifted = lifter.lift(keypoints_seq, scores_seq, image_size, bboxes_seq, cancel_token,
+                         sample_fps=source.fps, max_gap_seconds=.1 if options.get('motion_type') == 'attack' else .2)
     valid_scores = [score for score in scores_seq if score is not None]
     if len(lifted) != len(frame_meta):
         raise errors.MocapError(errors.INTERNAL_ERROR, "MotionBERT 输出帧数与有效输入帧数不一致。")
 
-    scale = pose3d_motionbert.estimate_metric_scale(lifted[0]) if len(lifted) else 1.0
+    from statistics import median
+    scale = median(pose3d_motionbert.estimate_metric_scale(pose) for pose in lifted) if len(lifted) else 1.0
     frames = []
     for index, (frame_number, timestamp) in enumerate(frame_meta):
+        if frame_number < requested_start or (requested_end and frame_number > requested_end):
+            continue
         body, confidence = pose3d_motionbert.h36m_to_standard(
             lifted[index], valid_scores[index], scale
         )
-        body = pose3d_motionbert.ground_and_stand(body)
+        if profile == 'quality_feet':
+            observation = next(row for row in options['_preview_rows'] if row['sample_frame'] == frame_number)
+            pose3d_motionbert.refine_feet_from_2d(body, observation['body2d'], image_size)
         frames.append(
             {
                 "frame": frame_number,
@@ -610,11 +637,13 @@ def _run_mmpose(job, profile, manifest, reporter, cancel_token, options) -> tupl
             }
         )
 
+    options['_preview_rows'] = [row for row in options['_preview_rows'] if row['sample_frame'] >= requested_start
+                               and (not requested_end or row['sample_frame'] <= requested_end)]
     if options.get("include_hands"):
         warnings.append(
             {
                 "code": CODE_HANDS_DISABLED,
-                "message": "quality 链路 v0.1 不做手部捕捉，已忽略 Include Hands。",
+                "message": "当前 Quality 链路不恢复三维手指，已忽略 Include Hands。",
             }
         )
         reporter.warning(warnings[-1]["code"], warnings[-1]["message"])

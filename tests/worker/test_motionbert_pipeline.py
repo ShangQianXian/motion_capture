@@ -39,6 +39,10 @@ class MotionBERTPipelineTests(unittest.TestCase):
                 captured.append(tuple(tensor.shape))
                 self_shape = (243, 17, 3)
                 assert tuple(tensor.shape) == self_shape
+                # Codec alone normalizes original pixels; the generic API must
+                # not resize each pose to an unrelated training bbox first.
+                np.testing.assert_allclose(tensor[121, 0, :2].numpy(), point[0] / 640 * 2 - [1, 480 / 640], atol=.004)
+                np.testing.assert_allclose(tensor[121, :, 2].numpy(), .42)
                 assert sample.gt_instances.lifting_target.shape == self_shape
                 assert sample.gt_instances.lifting_target_visible.shape[0] == 243
                 assert sample.gt_instance_labels.lifting_target_weight.shape[0] == 243
@@ -54,8 +58,8 @@ class MotionBERTPipelineTests(unittest.TestCase):
                 patch.object(adapter.model_manifest, 'require_artifact', return_value='unused'):
             lifter = adapter.Body3DLifter('unused', device='cpu', manifest={})
         point = np.arange(34, dtype=np.float32).reshape(17, 2)
-        for points, scores in (([point], [np.ones(17)]),
-                               ([point, None, point + 1], [np.ones(17), None, np.ones(17)])):
+        for points, scores in (([point], [np.ones(17) * .42]),
+                               ([point, None, point + 1], [np.ones(17) * .42, None, np.ones(17) * .42])):
             result = lifter.lift(points, scores, (640, 480))
             self.assertEqual(result.shape, (sum(p is not None for p in points), 17, 3))
             self.assertTrue(np.isfinite(result).all())

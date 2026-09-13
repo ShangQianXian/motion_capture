@@ -18,7 +18,7 @@ import os
 from . import errors, paths
 
 #: Profiles selectable as a capture profile in the UI.
-CAPTURE_PROFILES = ("preview", "quality", "quality_plus", "fallback_cpu")
+CAPTURE_PROFILES = ("preview", "quality", "quality_plus", "fallback_cpu", "quality_feet")
 
 #: Profiles that only describe optional model groups (preflight display only).
 AUXILIARY_PROFILES = ("hand_enhanced",)
@@ -33,6 +33,11 @@ ALL_PROFILES = CAPTURE_PROFILES + AUXILIARY_PROFILES
 #: "any of" requirement rather than a hard list. A user supplied
 #: ``manifest.json`` may override this by adding its own ``preflight_rules``.
 PROFILE_DEFAULT_RULES = {
+    'quality_feet': {
+        'required_artifact_ids': ['rtmdet_m_person', 'config_rtmdet_m_person',
+                                 'rtmpose_m_wholebody', 'config_rtmpose_m_wholebody',
+                                 'motionbert_body3d', 'config_motionbert_body3d'],
+    },
     "fallback_cpu": {
         "required_any_of": ["mediapipe_pose_lite", "mediapipe_pose_full"],
         "optional_artifact_ids": ["mediapipe_hand"],
@@ -377,6 +382,9 @@ def check_profile_requirements(profile: str, models_root: str | None) -> Preflig
     for artifact_id in required_ids:
         status = manifest.artifact_status(artifact_id, required=True)
         if status is None:
+            report.error = errors.MocapError(errors.MANIFEST_INVALID,
+                '模型清单缺少必需条目：' + artifact_id,
+                suggestion='请更新自定义 manifest.json，或使用随插件提供的 manifest.example.json。')
             report.warnings.append(
                 "manifest 中找不到 artifact id：{0}（profile {1}）".format(artifact_id, effective_profile)
             )
@@ -424,6 +432,8 @@ def check_profile_requirements(profile: str, models_root: str | None) -> Preflig
 
 def _resolve_effective_profile(manifest: ModelManifest, profile: str) -> tuple:
     """Apply manifest fallbacks, e.g. ``quality_plus`` -> ``quality``."""
+    if profile == 'quality_feet':
+        return profile, []  # Foot observations are part of this profile's contract.
     warnings = []
     current = profile
     for _ in range(4):  # guard against manifest fallback cycles

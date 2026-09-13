@@ -71,6 +71,13 @@ def postprocess(
     store them in the result file.
     """
     options = options or {}
+    if options.get('processing_version') == '0.3':
+        from ._core import motion_processing
+        processed, warnings, diagnostics = motion_processing.process(frames, fps, options)
+        options['_diagnostics'] = diagnostics
+        for warning in warnings:
+            _report(reporter, warning)
+        return processed, warnings
     warnings = []
 
     if not frames:

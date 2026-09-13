@@ -9,7 +9,7 @@
 ```powershell
 cd D:\blender_addons\motion_capture
 .\tools\build_zip.ps1
-# 输出：dist\motion_capture-0.2.0.zip
+# 输出：dist\motion_capture-0.3.0.zip
 ```
 
 脚本行为：

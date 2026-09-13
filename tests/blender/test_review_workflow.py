@@ -47,6 +47,11 @@ def main():
                 'loading a review creates no scene objects or animation')
         h.check('预览' in review.apply_block_reason(scene), 'application requires a rendered review')
         h.check(value.state.manifest is None, 'legacy results remain loadable')
+        props.motion_type = 'attack'
+        h.check(value.state.stale, 'motion preset edits invalidate an old result')
+        review.load_result(scene, path, restore_settings=True)
+        value = review.session(scene)
+        h.check(props.motion_type == 'general', 'legacy results restore a conservative motion preset')
         h.check(not value.accept_frame({'request_id': -1, 'source_index': 999, 'path': str(source)}),
                 'outdated media replies cannot change displayed frames')
         value.pending_id, value.pending_source, value.pending_sample = 7, 4, 2
@@ -71,6 +76,11 @@ def main():
         # Unit-level stand-in for the successful foreground draw callback.
         value.state.viewed = True
         h.check(not review.apply_block_reason(scene), 'reviewed matching result can be applied')
+        props.preview_stage = 'raw'
+        h.check(bool(review.apply_block_reason(scene)) and not value.state.viewed,
+                'raw diagnostic stage cannot qualify a final application')
+        props.preview_stage = 'processed'
+        h.check(not value.state.viewed, 'returning to final stage requires a fresh rendered review')
         props.flip_x = True
         h.check(not value.state.viewed, 'direction edits require displaying the updated pose')
         value.state.corrected(props.pitch_correction, props.flip_x)

@@ -43,11 +43,11 @@ def source_meta(source):
             "total_frames": source.native_total, "type": source.media_type}
 
 
-def write(job, result, result_path, rows, meta, profile):
+def write(job, result, result_path, rows, meta, profile, raw_frames=None, diagnostics=None):
     if not rows:
         return
     by_frame = {frame["frame"]: frame for frame in result["frames"]}
-    estimated = ['toe.L', 'toe.R'] if profile in ('quality', 'quality_plus') else []
+    estimated = ['toe.L', 'toe.R'] if profile in ('quality', 'quality_plus', 'quality_feet') else []
     for row in rows:
         frame = by_frame.get(row["sample_frame"])
         if frame:
@@ -57,8 +57,9 @@ def write(job, result, result_path, rows, meta, profile):
                    and value < skeleton.CONFIDENCE_LOW and name not in estimated]
             row["low_joints"] = low
             row["estimated_joints"] = estimated
+            row['unreliable_joints'] = [name for name in row.get('unreliable_joints', []) if name not in estimated]
             # postprocess interpolates per-joint tracks with low confidence.
-            interpolated = [name for name in frame.get("interpolated_joints", []) if name not in estimated]
+            interpolated = [name for name in frame.get("interpolated_joints", row.get('interpolated_joints', [])) if name not in estimated]
             row["interpolated_joints"] = interpolated
             row["status"] = "interpolated" if interpolated else ("low_confidence" if low else "detected")
         else:
@@ -74,6 +75,28 @@ def write(job, result, result_path, rows, meta, profile):
                "topology": "mediapipe33" if profile in ("preview", "fallback_cpu") else "coco17",
                "edges": preview.MP_EDGES if profile in ("preview", "fallback_cpu") else preview.COCO_EDGES,
                "frames": rows}
+    if profile == 'quality_feet':
+        payload['topology'] = 'coco_wholebody133'
+        payload['edges'] = list(preview.COCO_EDGES) + [(15, 17), (15, 18), (15, 19), (16, 20), (16, 21), (16, 22)]
+    if diagnostics:
+        payload['diagnostics'] = diagnostics
+        payload['processing_version'] = '0.3'
+        payload['coordinate_space'] = diagnostics.get('coordinate_space', 'root_relative')
+        payload['motion_type'] = diagnostics.get('motion_type', 'general')
+    if raw_frames:
+        from . import export_result
+        raw = export_result.build_result(raw_frames, result['fps'], source_path=job['input']['path'],
+                                         source_type=job['input']['type'], profile=profile)
+        path = export_result.write_result(raw, os.path.dirname(result_path), 'mocap_raw.json')
+        with open(path, 'rb') as handle:
+            payload['stages'] = {'raw': {'file': 'mocap_raw.json', 'sha256': hashlib.sha256(handle.read()).hexdigest()}}
+        raw_numbers = {frame['frame'] for frame in raw_frames}
+        for row in rows:
+            row['raw_result_frame'] = row['sample_frame'] if row['sample_frame'] in raw_numbers else None
+            row['joint_sources'] = {'body3d': 'mediapipe_world' if profile in ('preview', 'fallback_cpu') else 'motionbert_lifted',
+                                    'processed_pelvis': 'kinematic_fit',
+                                    'feet3d': 'estimated' if estimated else 'mediapipe_world',
+                                    'feet2d': 'detected' if row.get('feet2d') else 'unavailable'}
     preview.validate_manifest(payload)
     target = os.path.join(os.path.dirname(result_path), preview.MANIFEST_FILENAME)
     with open(target + ".tmp", "w", encoding="utf-8") as handle:

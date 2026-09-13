@@ -47,7 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Motion Capture for Rigify - external inference worker.",
     )
     parser.add_argument("--job", metavar="PATH", help="path to a job JSON file")
-    parser.add_argument("--profile", choices=("preview", "fallback_cpu", "quality", "quality_plus"),
+    parser.add_argument("--profile", choices=("preview", "fallback_cpu", "quality", "quality_plus", "quality_feet"),
                         help="validate required dependencies for this profile with --check-env")
     parser.add_argument(
         "--mock",
