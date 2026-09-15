@@ -10,7 +10,6 @@ Cannot be exercised without the OpenMMLab stack and the MotionBERT weights; see
 
 from __future__ import annotations
 
-import math
 
 from ._core import errors, model_manifest, skeleton
 from ._core import retarget_math as rm
@@ -285,18 +284,12 @@ def h36m_to_standard(joints_3d, confidences=None, scale: float = 1.0) -> tuple:
 
     for side in ("L", "R"):
         ankle = body.get("ankle.{0}".format(side))
-        knee = body.get("knee.{0}".format(side))
         if ankle is None:
             continue
         forward = (0.0, -TOE_FORWARD_OFFSET, 0.0)
-        if knee is not None:
-            down = rm.vec_normalize(rm.vec_sub(ankle, knee))
-            # Foot points roughly forward and perpendicular to the shin.
-            side_axis = rm.vec_cross(down, (0.0, 0.0, 1.0))
-            forward_dir = rm.vec_normalize(rm.vec_cross(side_axis, down)) if rm.vec_length(side_axis) > 1e-6 else (0.0, -1.0, 0.0)
-            if forward_dir[1] > 0.0:
-                forward_dir = rm.vec_neg(forward_dir)
-            forward = rm.vec_scale(forward_dir, TOE_FORWARD_OFFSET)
+        from ._core import orientations
+        if all(n in body for n in ('shoulder.L', 'shoulder.R', 'chest', 'pelvis')):
+            forward = rm.quat_rotate_vector(orientations.body_basis(body), forward)
         toe = rm.vec_add(ankle, forward)
         # Coordinates are still pelvis-relative: ankles normally have negative Z.
         # Grounding happens once for the whole body in ground_and_stand().
@@ -336,26 +329,3 @@ def ground_and_stand(body3d: dict) -> dict:
         return body3d
     offset = (0.0, 0.0, -min(heights))
     return {name: rm.vec_add(value, offset) for name, value in body3d.items()}
-
-
-def refine_feet_from_2d(body, points, image_size=(1, 1)):
-    """Constrain foot image-plane direction; depth remains an explicitly estimated prior."""
-    if len(points) < 23:
-        return
-    # Normalize against shoulder width instead of treating pixels as metric measurements.
-    aspect = image_size[1] / image_size[0]
-    width_2d = math.hypot(points[5][0] - points[6][0], (points[5][1] - points[6][1]) * aspect)
-    if width_2d < .025 or min(points[5][2], points[6][2]) < .5:
-        return
-    scale = rm.vec_distance(body['shoulder.L'], body['shoulder.R']) / width_2d
-    for side, ankle_index, toe_index, heel_index in (('L', 15, 17, 19), ('R', 16, 20, 22)):
-        ankle, toe = body['ankle.' + side], body['toe.' + side]
-        if min(points[ankle_index][2], points[toe_index][2], points[heel_index][2]) < .5:
-            continue
-        prior = rm.vec_sub(toe, ankle)
-        length = max(.05, rm.vec_length(prior))
-        dx = max(-length * .95, min(length * .95, (points[toe_index][0] - points[heel_index][0]) * scale * .7))
-        dz = max(-length * .5, min(length * .5, -(points[toe_index][1] - points[heel_index][1]) * aspect * scale * .7))
-        dy = math.copysign(math.sqrt(max(.001, length * length - dx * dx - dz * dz)), prior[1])
-        direction = rm.vec_scale(rm.vec_normalize((dx, dy, dz)), length)
-        body['toe.' + side] = rm.vec_add(ankle, direction)

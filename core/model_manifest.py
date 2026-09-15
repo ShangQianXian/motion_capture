@@ -190,6 +190,14 @@ class ModelManifest(object):
         """Merge manifest rules with the built-in defaults for ``profile``."""
         merged = dict(PROFILE_DEFAULT_RULES.get(profile) or {})
         merged.update(self.preflight_rules.get(profile) or {})
+        if profile in ('quality', 'quality_plus', 'quality_feet'):
+            required = list(merged.get('required_artifact_ids') or [])
+            if profile == 'quality':
+                required = [n for n in required if n not in ('rtmpose_m_body', 'config_rtmpose_m_body')]
+            for name in ('rtmpose_m_wholebody', 'config_rtmpose_m_wholebody'):
+                if name not in required:
+                    required.append(name)
+            merged['required_artifact_ids'] = required
         return merged
 
     def artifact(self, artifact_id: str) -> dict | None:

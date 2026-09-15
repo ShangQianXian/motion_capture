@@ -140,6 +140,26 @@ class AdapterShapes(unittest.TestCase):
         self.assertEqual(warnings[0]["code"], pipeline.CODE_PROFILE_FALLBACK)
         source.close.assert_called_once()
 
+    def test_quality_plus_keeps_body_and_adds_wholebody_observations(self):
+        from unittest.mock import Mock
+        from backend_worker import pipeline, media_decode, pose2d_mmpose, pose3d_motionbert
+        source=Mock(fps=24.,native_fps=24.,width=640,height=480,native_total=1,total_frames=1,media_type='image')
+        source.__iter__=Mock(return_value=iter([SimpleNamespace(index=0,source_index=0,timestamp=0.,width=640,height=480,image=None)]))
+        body,extra=Mock(),Mock()
+        body.estimate.return_value=(np.full((17,2),50.),np.full(17,.9))
+        extra.estimate.return_value=(np.full((133,2),100.),np.full(133,.8))
+        options={}
+        with patch.object(pose2d_mmpose,'resolve_device',return_value='cpu'), patch.object(pose2d_mmpose,'PersonDetector'), \
+                patch.object(pose2d_mmpose,'Body2DEstimator',side_effect=[body,extra]), \
+                patch.object(media_decode,'open_media',return_value=source), patch.object(pose3d_motionbert,'Body3DLifter') as lifter:
+            lifter.return_value.lift.return_value=np.arange(51).reshape(1,17,3)
+            pipeline._run_mmpose({'input':{'path':'fixture.png'}},'quality_plus',{},Mock(),None,options)
+        points=options['_preview_rows'][0]['body2d']
+        self.assertEqual(len(points),133)
+        self.assertAlmostEqual(points[0][0],50/640)
+        self.assertAlmostEqual(points[23][0],100/640)
+        self.assertEqual(len(options['_preview_rows'][0]['feet2d']['L']),3)
+
     @unittest.skipUnless(importlib.util.find_spec("mmpose"), "requires Quality worker")
     def test_real_mmpose_api_contract_without_weights(self):
         from mmpose.apis import inference_pose_lifter_model

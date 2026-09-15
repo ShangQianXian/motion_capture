@@ -51,6 +51,9 @@ def write(job, result, result_path, rows, meta, profile, raw_frames=None, diagno
     for row in rows:
         frame = by_frame.get(row["sample_frame"])
         if frame:
+            if frame.get('orientations'):
+                estimated = [joint + side for side in ('L', 'R') for joint in ('toe.', 'heel.')
+                             if row.get('orientation_quality', {}).get('foot.'+side, {}).get('estimated', True)]
             row["result_frame"] = frame["frame"]
             scores = frame.get("confidence", {})
             low = [name for name, value in scores.items() if isinstance(value, (int, float))
@@ -75,12 +78,12 @@ def write(job, result, result_path, rows, meta, profile, raw_frames=None, diagno
                "topology": "mediapipe33" if profile in ("preview", "fallback_cpu") else "coco17",
                "edges": preview.MP_EDGES if profile in ("preview", "fallback_cpu") else preview.COCO_EDGES,
                "frames": rows}
-    if profile == 'quality_feet':
+    if any(len(row.get('body2d', [])) == 133 for row in rows):
         payload['topology'] = 'coco_wholebody133'
         payload['edges'] = list(preview.COCO_EDGES) + [(15, 17), (15, 18), (15, 19), (16, 20), (16, 21), (16, 22)]
     if diagnostics:
         payload['diagnostics'] = diagnostics
-        payload['processing_version'] = '0.3'
+        payload['processing_version'] = diagnostics.get('processing_version', '0.3.1')
         payload['coordinate_space'] = diagnostics.get('coordinate_space', 'root_relative')
         payload['motion_type'] = diagnostics.get('motion_type', 'general')
     if raw_frames:
@@ -91,11 +94,13 @@ def write(job, result, result_path, rows, meta, profile, raw_frames=None, diagno
         with open(path, 'rb') as handle:
             payload['stages'] = {'raw': {'file': 'mocap_raw.json', 'sha256': hashlib.sha256(handle.read()).hexdigest()}}
         raw_numbers = {frame['frame'] for frame in raw_frames}
+        raw_info = {frame['frame']: frame.get('orientation_quality', {}) for frame in raw_frames}
         for row in rows:
+            row['raw_orientation_quality'] = raw_info.get(row['sample_frame'], {})
             row['raw_result_frame'] = row['sample_frame'] if row['sample_frame'] in raw_numbers else None
             row['joint_sources'] = {'body3d': 'mediapipe_world' if profile in ('preview', 'fallback_cpu') else 'motionbert_lifted',
                                     'processed_pelvis': 'kinematic_fit',
-                                    'feet3d': 'estimated' if estimated else 'mediapipe_world',
+                                    'feet3d': 'image_constrained_estimate' if profile in ('quality', 'quality_plus', 'quality_feet') else 'mediapipe_world',
                                     'feet2d': 'detected' if row.get('feet2d') else 'unavailable'}
     preview.validate_manifest(payload)
     target = os.path.join(os.path.dirname(result_path), preview.MANIFEST_FILENAME)

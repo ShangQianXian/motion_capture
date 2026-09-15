@@ -13,8 +13,8 @@ from core import errors, model_manifest, paths
 QUALITY_FILES = (
     "openmmlab/detectors/rtmdet_m_8xb32-100e_coco-obj365-person-235e8209.pth",
     "openmmlab/configs/rtmdet_m_640-8xb32_coco-person.py",
-    "openmmlab/body2d/rtmpose-m_simcc-body7_pt-body7_420e-256x192-e48f03d0_20230504.pth",
-    "openmmlab/configs/rtmpose-m_8xb256-420e_body8-256x192.py",
+    "openmmlab/body2d/rtmpose-m_simcc-coco-wholebody_pt-aic-coco_270e-256x192-cd5e845c_20230123.pth",
+    "openmmlab/configs/rtmpose-m_8xb64-270e_coco-wholebody-256x192.py",
     "openmmlab/body3d/motionbert_ft_h36m-d80af323_20230531.pth",
     "openmmlab/configs/motionbert_dstformer-ft-243frm_8xb32-120e_h36m.py",
 )
@@ -159,8 +159,8 @@ class TestPreflight(TempDirCase):
             {
                 "rtmdet_m_person",
                 "config_rtmdet_m_person",
-                "rtmpose_m_body",
-                "config_rtmpose_m_body",
+                "rtmpose_m_wholebody",
+                "config_rtmpose_m_wholebody",
                 "motionbert_body3d",
                 "config_motionbert_body3d",
             },

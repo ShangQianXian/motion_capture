@@ -101,7 +101,8 @@ def is_problem(row):
     points = row.get('body2d', [])
     if len(points) == 133:
         points = points[:23]  # Face/finger output is outside this capture profile's scope.
-    return bool(row.get('unreliable') or row.get('unreliable_joints')) or any(point[2] < skeleton.CONFIDENCE_LOW for point in points)
+    weak_orientation = any(info.get('confidence', 0) < .4 for info in row.get('orientation_quality', {}).values())
+    return weak_orientation or bool(row.get('unreliable') or row.get('unreliable_joints')) or any(point[2] < skeleton.CONFIDENCE_LOW for point in points)
 
 
 def next_problem(rows, current, direction):
@@ -211,6 +212,10 @@ class ReviewState:
         self.revision += 1
 
     def matches(self, settings, path):
+        if self.manifest and self.manifest.get('processing_version'):
+            from .orientations import VERSION as processing_version
+            if self.manifest['processing_version'] != processing_version:
+                return False
         current = dict(settings)
         current.setdefault('motion_type', 'general')
         return not self.stale and settings_equal(self.settings, current) and paths.normalize(path) == paths.normalize(self.source_path)

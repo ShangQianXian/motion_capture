@@ -116,10 +116,10 @@ STATUS_LABELS = {
 }
 
 PROFILE_LABELS = {
-    'quality_feet': '身体与脚部增强（WholeBody）',
+    'quality_feet': '身体与脚部增强（兼容 Quality）',
     "preview": "快速捕捉（MediaPipe）",
-    "quality": "Quality（RTMPose + MotionBERT）",
-    "quality_plus": "Quality Plus（RTMPose-x）",
+    "quality": "Quality（身体、脚掌与头部）",
+    "quality_plus": "Quality Plus（增强身体、脚掌与头部）",
     "fallback_cpu": "CPU Fallback（低配兜底）",
 }
 

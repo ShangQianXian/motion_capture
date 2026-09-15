@@ -9,7 +9,7 @@ import json
 import math
 import os
 
-from . import errors, paths, skeleton
+from . import errors, paths, skeleton, orientations
 
 #: Result schema version produced and accepted by v0.1.
 RESULT_VERSION = "0.1"
@@ -18,7 +18,7 @@ RESULT_VERSION = "0.1"
 class Frame(object):
     """One frame of a mocap result."""
 
-    __slots__ = ("frame", "time", "body3d", "hands3d", "confidence", "contacts")
+    __slots__ = ("frame", "time", "body3d", "hands3d", "confidence", "contacts", "orientations")
 
     def __init__(self, data: dict) -> None:
         self.frame = int(data.get("frame", 0))
@@ -27,6 +27,7 @@ class Frame(object):
         self.hands3d = {k: tuple(float(c) for c in v) for k, v in (data.get("hands3d") or {}).items()}
         self.confidence = dict(data.get("confidence") or {})
         self.contacts = dict(data.get("contacts") or {})
+        self.orientations = {k: tuple(v) for k, v in (data.get('orientations') or {}).items()}
 
     def joint(self, name: str):
         """Position of ``name`` from body or hand data, or ``None``."""
@@ -49,6 +50,8 @@ class Frame(object):
             "confidence": self.confidence,
             "contacts": self.contacts,
         }
+        if self.orientations:
+            payload['orientations'] = {k: [round(c, 8) for c in v] for k, v in self.orientations.items()}
         return payload
 
     def __repr__(self) -> str:  # pragma: no cover - debugging helper
@@ -211,6 +214,14 @@ def validate_result(data, max_reported: int = 8) -> dict:
             )
             reported += 1
             continue
+        rotations = entry.get('orientations', {})
+        if not isinstance(rotations, dict) or any(
+            name not in orientations.NAMES or not isinstance(q, (list, tuple)) or len(q) != 4
+            or any(not isinstance(v, (int, float)) or isinstance(v, bool) or not math.isfinite(v) for v in q)
+            or abs(sum(v*v for v in q)-1) > .002 for name, q in (rotations.items() if isinstance(rotations, dict) else ())
+        ):
+            problems.append('frames[{0}].orientations 必须为有效单位四元数'.format(index))
+            reported += 1
         hands = entry.get("hands3d")
         if hands is not None and not isinstance(hands, dict):
             problems.append("frames[{0}].hands3d 必须是对象".format(index))
@@ -311,6 +322,8 @@ def looks_y_up(result: MocapResult, sample_limit: int = 120) -> bool:
 def mirror_result_x(result: MocapResult) -> None:
     """Negate X on every joint in place and swap left/right joint names."""
     for frame in result.frames:
+        frame.orientations = {skeleton.mirror_joint(name): orientations.mirror(q)
+                              for name, q in frame.orientations.items()}
         for store in (frame.body3d, frame.hands3d):
             flipped = {}
             for name, position in store.items():
@@ -323,3 +336,4 @@ def mirror_result_x(result: MocapResult) -> None:
                 swapped[skeleton.mirror_joint(name)] = value
             store.clear()
             store.update(swapped)
+    result.data['frames'] = [frame.to_dict() for frame in result.frames]

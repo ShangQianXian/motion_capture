@@ -14,7 +14,7 @@ from __future__ import annotations
 bl_info = {
     "name": "Motion Capture for Rigify",
     "author": "Project Team",
-    "version": (0, 3, 0),
+    "version": (0, 3, 1),
     "blender": (4, 5, 0),
     "location": "View3D > Sidebar > Mocap",
     "description": "Capture body motion from video or image and retarget it to Rigify rigs.",

@@ -9,7 +9,7 @@ import gpu
 from bpy.props import StringProperty
 from gpu_extras.batch import batch_for_shader
 
-from ..core import preview, paths
+from ..core import preview, paths, retarget_math as rm
 from . import review
 
 BG = (0.035, 0.045, 0.065, 1)
@@ -246,7 +246,7 @@ class MOCAP_OT_open_preview(bpy.types.Operator):
         label("R 右侧", rx + 78, 137, 12, RIGHT)
         label("中键旋转 / 滚轮缩放", rx + 146, 137, 12, MUTED)
         if row and row.get('estimated_joints'):
-            label("灰色脚趾为估算关节", rx + 12, 158, 11, MUTED)
+            label("短线显示头 / 脚朝向；灰色为估算", rx + 12, 158, 11, MUTED)
         self.button("正面", (rx + 8, height - 107, 52, 26), "front")
         self.button("侧面", (rx + 64, height - 107, 52, 26), "side")
         self.button("复位", (rx + 120, height - 107, 52, 26), "reset")
@@ -299,7 +299,7 @@ class MOCAP_OT_open_preview(bpy.types.Operator):
         points = row.get("body2d", [])
         topology = (self.value.state.manifest or {}).get("topology")
         if topology == 'coco_wholebody133':
-            points = points[:23]  # Body and feet; no face/hand feature was requested.
+            points = points[:91]  # Body, feet and face; hand capture remains separate.
         if not points:
             return
         x, y, width, height = fit
@@ -365,6 +365,19 @@ class MOCAP_OT_open_preview(bpy.types.Operator):
             if inside(rect, *point):
                 color = MUTED if name in estimated else LOW if frame.confidence_of(name) < preview.skeleton.CONFIDENCE_LOW else (LEFT if name.endswith('.L') else RIGHT if name.endswith('.R') else TEXT)
                 dot(point, color, 4 if name in frame.body3d else 2)
+        for name, q in frame.orientations.items():
+            anchor = frame.body3d.get('head' if name == 'head' else 'ankle.' + name[-1])
+            if anchor is None:
+                continue
+            quality_key = 'raw_orientation_quality' if self.scene.mocap_props.preview_stage == 'raw' else 'orientation_quality'
+            info = row.get(quality_key, {}).get(name, {})
+            color = MUTED if info.get('estimated', True) else (TEXT if name == 'head' else LEFT if name.endswith('.L') else RIGHT)
+            for vector, size in (((0, -1, 0), .13), ((0, 0, 1), .065)):
+                end = rm.vec_add(anchor, rm.vec_scale(rm.quat_rotate_vector(q, vector), size))
+                a, b = project(anchor), project(end)
+                if inside(rect, *a) and inside(rect, *b):
+                    line(a, b, color, 2)
+                    dot(b, color, 3)
 
     def dispatch(self, command):
         props = self.scene.mocap_props

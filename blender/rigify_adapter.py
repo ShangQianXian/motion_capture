@@ -354,6 +354,15 @@ def _source_reference(frame, ref: str):
 def _target_rotation(chain, frame, world_to_pose=None):
     """Pose-space rotation delta for a world-space source direction."""
     spec = chain.spec
+    orientation_name = 'head' if spec.target == 'head' else ('foot.' + spec.target[-1] if spec.target.startswith('foot_fk.') else None)
+    q = frame.orientations.get(orientation_name)
+    if q is not None:
+        direction = rm.quat_rotate_vector(q, (0, 0, 1)) if orientation_name == 'head' else rm.vec_sub(
+            frame.body3d['toe.' + orientation_name[-1]], frame.body3d['ankle.' + orientation_name[-1]])
+        reference = rm.quat_rotate_vector(q, (1, 0, 0))
+        if world_to_pose is not None:
+            direction, reference = tuple(world_to_pose @ Vector(direction)), tuple(world_to_pose @ Vector(reference))
+        return rm.aim_rotation_with_reference(chain.rest_direction, chain.rest_reference, direction, reference)
     if spec.source is None:
         return None
     start_name, end_name = spec.source
@@ -596,7 +605,7 @@ def _retarget_generator(result, armature, options=None):
                     if mode == skeleton.MODE_ROOT:
                         _apply_root(pose_bone, armature, frame, scale, origin, options)
                         continue
-                    if mode == skeleton.MODE_IDENTITY:
+                    if mode == skeleton.MODE_IDENTITY and not (chain.spec.target == 'head' and 'head' in frame.orientations):
                         # Follow the parent exactly: rest orientation relative to it.
                         pose_bone.rotation_quaternion = IDENTITY_QUATERNION
                         continue

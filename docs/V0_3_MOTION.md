@@ -25,14 +25,14 @@
 
 ## 模型与安装
 
-保留快速捕捉（MediaPipe）、Quality、Quality Plus。新增“身体与脚部增强”使用 RTMDet-m Person、RTMPose-m WholeBody、MotionBERT，复用 Quality worker 环境，不增加新三维模型。
+v0.3.1 的 Quality 默认使用 RTMDet-m Person、RTMPose-m WholeBody、MotionBERT，恢复独立头部与脚掌朝向。“身体与脚部增强”保留为 Quality 的兼容入口。Quality Plus 保留 RTMPose-x 身体关键点，并补充 WholeBody 的脚部与面部观测。快速捕捉继续使用 MediaPipe，朝向标为近似估算。
 
 ```powershell
 .\tools\download_models.ps1 -Profile quality_feet
 .\.venv\Scripts\python.exe -m backend_worker.cli --check-env --profile quality_feet
 ```
 
-WholeBody 输出 133 个二维点，本版只显示身体和脚部 23 点。脚趾、脚跟二维点用于接触证据与有限的图像平面方向约束，脚部深度仍为估计；不恢复三维脸部、精确手指、武器轨迹或握持。
+WholeBody 输出 133 个二维点，显示身体、脚部及面部 91 点。脚跟与大小脚趾约束刚性足部朝向；面部稳定点与通用脸部参考经 PnP 求解头部朝向。预览短线显示前向和上向，灰色表示估算。脚部深度、相机内参及非真人脸部比例仍有歧义；不恢复表情、口型、精确手指或武器握持。
 
 配置固定 MMPose v1.3.2，权重链接固定在模型清单。新增档位缺少模型会报错，不静默替换。使用自定义 `models/manifest.json` 的用户需加入新条目，或移走自定义清单使用插件示例清单；不要覆盖已有模型文件。权重与运行时不随插件 ZIP 分发。许可状态见 [LICENSES.md](LICENSES.md)，未标注商业授权已确认。
 
@@ -46,16 +46,19 @@ WholeBody 输出 133 个二维点，本版只显示身体和脚部 23 点。脚�
 
 ## 数据与算法边界
 
-`mocap_result.json` 保持旧格式，含最终三维；`mocap_raw.json` 保存模型阶段三维；`preview_manifest.json` 保持可选扩展兼容旧结果，增加：
+`mocap_result.json` 保持 0.1 外层格式，帧中可选 `orientations` 保存 `head`、`foot.L`、`foot.R` 的单位四元数 `(w,x,y,z)`：将 +X 左、−Y 前、+Z 上的解剖学坐标转换到结果坐标系。`mocap_raw.json` 保存模型与朝向求解阶段的原始三维；`preview_manifest.json` 保持可选扩展兼容旧结果，增加：
 
 - `stages.raw` 文件名及 SHA256、`raw_result_frame` 对应关系；
 - `motion_type`、`processing_version`、`coordinate_space`、完整采样记录；
 - `feet2d`、`joint_sources`、`contact_states`、插值／不可靠标记；
+- `orientation_quality`／`raw_orientation_quality` 中的来源、置信度、估算标记、投影误差及固定足长；
 - `diagnostics` 中各关节幅度、延迟、接触区间，以及可用时的 CUDA 显存峰值。
 
 三维坐标按整个序列固定平移估计地面，停止逐帧“最低脚贴地”。从可信三维估计固定肢体骨长，以末端轨迹求解膝盖／肘部，必要时有限调整骨盆以保持腿可达。骨盆校正属于运动学估计。根相对结果只限制可信支撑脚高度，不把向后的支撑脚运动锁死为世界固定点；有真实世界坐标的数据才使用世界位置锁脚。
 
 现有单目链路没有可靠世界水平轨迹，默认不会添加前进运动掩盖姿态问题。真实腾空高度和被遮挡肢体仍有歧义。幅度保留指标比较处理前后，不代表对上传视频的识别准确率。
+
+处理版本升为 `0.3.1`。旧 `0.3` 预览仍可读取，但不能当作新修复结果直接应用，需要重新生成。最终足部重建后统一调整整段根相对数据的地面原点，避免脚趾穿过估计地面；这只改变一个固定高度，不逐帧移动腿部，也不保证所有支撑帧的鞋底完全贴地。有真实世界坐标的数据保持原地面原点。
 
 ## 可重复验证
 

@@ -10,7 +10,7 @@
     },
     "quality": {
       "display_name": "High Quality",
-      "description": "Default high quality offline pipeline using RTMDet-m, RTMPose-m, and MotionBERT."
+      "description": "WholeBody body, feet and face observations with MotionBERT lifting and independent head/foot orientations."
     },
     "quality_plus": {
       "display_name": "High Quality Plus",
@@ -26,7 +26,7 @@
     },
     "quality_feet": {
       "display_name": "Body and Feet",
-      "description": "RTMPose WholeBody and MotionBERT; commercial authorization not verified."
+      "description": "Compatibility alias of quality: whole-body, feet and head orientation."
     }
   },
   "artifacts": [
@@ -356,6 +356,8 @@
       "purpose": "Actual 2D body and foot observations",
       "required": true,
       "profiles": [
+        "quality",
+        "quality_plus",
         "quality_feet"
       ],
       "relative_path": "openmmlab/body2d/rtmpose-m_simcc-coco-wholebody_pt-aic-coco_270e-256x192-cd5e845c_20230123.pth",
@@ -373,6 +375,8 @@
       "purpose": "133-point WholeBody configuration",
       "required": true,
       "profiles": [
+        "quality",
+        "quality_plus",
         "quality_feet"
       ],
       "relative_path": "openmmlab/configs/rtmpose-m_8xb64-270e_coco-wholebody-256x192.py",
@@ -395,10 +399,10 @@
       "required_artifact_ids": [
         "rtmdet_m_person",
         "config_rtmdet_m_person",
-        "rtmpose_m_body",
-        "config_rtmpose_m_body",
         "motionbert_body3d",
-        "config_motionbert_body3d"
+        "config_motionbert_body3d",
+        "rtmpose_m_wholebody",
+        "config_rtmpose_m_wholebody"
       ],
       "optional_artifact_ids": [
         "mediapipe_hand",
@@ -412,7 +416,9 @@
         "rtmpose_x_body",
         "config_rtmpose_x_body",
         "motionbert_body3d",
-        "config_motionbert_body3d"
+        "config_motionbert_body3d",
+        "rtmpose_m_wholebody",
+        "config_rtmpose_m_wholebody"
       ],
       "fallback_profile": "quality"
     },

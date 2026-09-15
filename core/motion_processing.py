@@ -4,9 +4,9 @@ from __future__ import annotations
 import copy
 import math
 from statistics import median
-from . import retarget_math as rm, skeleton, smoothing
+from . import retarget_math as rm, skeleton, smoothing, orientations
 
-VERSION = '0.3'
+VERSION = orientations.VERSION
 PRESETS = {'general': .10, 'walk': .15, 'run': .10, 'attack': .067, 'idle': .20}
 LABELS = {'general': '通用／混合', 'walk': '走路', 'run': '跑步', 'attack': '攻击', 'idle': '待机'}
 LIMBS = tuple((a + '.' + side, b + '.' + side) for side in ('L', 'R')
@@ -39,6 +39,12 @@ def fill_timeline(frames, rows, max_gap):
             continue
         fraction = (timestamp - a['time']) / (b['time'] - a['time'])
         frame = dict(frame=number, time=timestamp, confidence={}, contacts={}, interpolated_joints=[])
+        if a.get('orientations') and b.get('orientations'):
+            frame['orientations'] = {name: rm.slerp(q, b['orientations'][name], fraction)
+                                     for name, q in a['orientations'].items() if name in b['orientations']}
+            frame['orientation_quality'] = {name: dict(a.get('orientation_quality', {}).get(name, {}),
+                                                       confidence=.3, source='interpolated', estimated=True)
+                                            for name in frame['orientations']}
         for key in ('body3d', 'hands3d'):
             frame[key] = {name: rm.vec_lerp(point, b[key][name], fraction)
                           for name, point in a.get(key, {}).items() if name in b.get(key, {})}
@@ -125,7 +131,11 @@ def constrain_lengths(frames):
                   if a in f['body3d'] and b in f['body3d'] and min(confidence(f, a), confidence(f, b)) >= .4]
         if values:
             lengths[a, b] = median(values)
+    planes, previous_time = {}, None
     for frame in frames:
+        if previous_time is not None and frame['time'] - previous_time > .2:
+            planes.clear()
+        previous_time = frame['time']
         body = frame['body3d']
         # Fit the pelvis to reachable legs before solving the knees, rather than
         # shortening ankle excursions when a noisy leg is slightly overextended.
@@ -150,7 +160,7 @@ def constrain_lengths(frames):
         # Solve whole limbs about their observed endpoints.
         for side in ('L', 'R'):
             if not set(frame.get('unreliable_joints', [])).intersection(('hip.' + side, 'knee.' + side, 'ankle.' + side)):
-                _leg_ik(body, side, body['ankle.' + side], lengths)
+                _leg_ik(body, side, body['ankle.' + side], lengths, planes=planes)
             if not set(frame.get('unreliable_joints', [])).intersection(('shoulder.' + side, 'elbow.' + side, 'wrist.' + side)):
                 old_wrist = body['wrist.' + side]
                 _leg_ik(body, side, old_wrist, lengths, arm=True)
@@ -222,7 +232,7 @@ def foot_states(frames, coordinate_space='root_relative', preset='general', rows
     return states, grounds
 
 
-def _leg_ik(body, side, target, lengths, arm=False):
+def _leg_ik(body, side, target, lengths, arm=False, planes=None):
     hip, knee, ankle = tuple(name + '.' + side for name in (('shoulder', 'elbow', 'wrist') if arm else ('hip', 'knee', 'ankle')))
     if any(key not in body for key in (hip, knee, ankle)):
         return
@@ -234,8 +244,15 @@ def _leg_ik(body, side, target, lengths, arm=False):
     target = rm.vec_add(body[hip], rm.vec_scale(direction, distance))
     axis = rm.vec_sub(body[knee], body[hip])
     plane = rm.vec_sub(axis, rm.vec_scale(direction, rm.vec_dot(axis, direction)))
+    if rm.vec_length(plane) < .015 and not arm:
+        reference = (planes or {}).get(side)
+        if reference is None:
+            reference = rm.quat_rotate_vector(orientations.body_basis(body), (0, -1, 0))
+        plane = rm.vec_sub(reference, rm.vec_scale(direction, rm.vec_dot(reference, direction)))
     if rm.vec_length(plane) < 1e-6:
-        plane = rm.vec_cross(direction, (1, 0, 0))
+        plane = rm.any_perpendicular(direction)
+    if planes is not None:
+        planes[side] = rm.vec_normalize(plane)
     along = (l1 * l1 - l2 * l2 + distance * distance) / (2 * distance)
     bend = math.sqrt(max(0, l1 * l1 - along * along))
     body[knee] = rm.vec_add(rm.vec_add(body[hip], rm.vec_scale(direction, along)), rm.vec_scale(rm.vec_normalize(plane), bend))
@@ -244,6 +261,33 @@ def _leg_ik(body, side, target, lengths, arm=False):
     for prefix in (() if arm else ('toe.', 'heel.')):
         if prefix + side in body:
             body[prefix + side] = rm.vec_add(body[prefix + side], delta)
+
+
+def _ground_height(frames):
+    if any(f.get('orientations') for f in frames):
+        # Ground placement must not feed toe orientation noise into the legs.
+        return smoothing.percentile([f['body3d']['ankle.'+s][2] - .045 *
+                    f.get('orientation_quality', {}).get('foot.'+s, {}).get('length', .215)/.215
+                    for f in frames for s in ('L','R')], .05)
+    return smoothing.percentile([p[2] for f in frames for n,p in f['body3d'].items()
+                                 if n.startswith(('ankle.','toe.','heel.'))], .05)
+
+
+def _orientation_ground_origin(frames, space):
+    """One constant sequence origin, after orientation reconstruction.
+
+    Root-relative models have no measured floor. Moving this origin must never
+    change a knee angle, relative joint position, or any temporal displacement.
+    World-coordinate captures keep their measured origin untouched.
+    """
+    if space == 'world' or not any(f.get('orientations') for f in frames):
+        return 0.
+    lowest = min(p[2] for f in frames for n,p in f['body3d'].items() if n.startswith(('toe.','heel.')))
+    shift = -lowest
+    for f in frames:
+        for key in ('body3d','hands3d'):
+            f[key] = {n:(p[0],p[1],p[2]+shift) for n,p in f.get(key,{}).items()}
+    return shift
 
 
 def process(frames, fps, options=None):
@@ -256,7 +300,7 @@ def process(frames, fps, options=None):
     if len(frames) <= 1:
         # Static placement is independent of the temporal preset.
         if raw and options.get('coordinate_space', 'root_relative') != 'world':
-            height = min(p[2] for n, p in raw[0]['body3d'].items() if n.startswith(('ankle.', 'toe.', 'heel.')))
+            height = _ground_height(raw) if raw[0].get('orientations') else min(p[2] for n,p in raw[0]['body3d'].items() if n.startswith(('ankle.','toe.','heel.')))
             for key in ('body3d', 'hands3d'):
                 raw[0][key] = {n: (p[0], p[1], p[2] - height) for n, p in raw[0].get(key, {}).items()}
         sparse_video = len(rows) > 1
@@ -264,6 +308,8 @@ def process(frames, fps, options=None):
             if not raw or row['sample_frame'] != raw[0]['frame']:
                 row['unreliable'] = True
         warnings = [dict(code='SPARSE_CAPTURE', message='视频仅恢复到一个有效姿态，不能代表完整动作，请核对漏检区间。')] if sparse_video else []
+        orientations.stabilize(raw, strength=0)
+        _orientation_ground_origin(raw, options.get('coordinate_space', 'root_relative'))
         return raw, warnings, {'processing_version': VERSION, 'motion_type': preset,
                               'single_frame': not sparse_video, 'sparse_capture': sparse_video}
     gap = .1 if preset == 'attack' else .2
@@ -275,8 +321,7 @@ def process(frames, fps, options=None):
     if space != 'world':
         warnings.append({'code': 'ROOT_TRAJECTORY_UNAVAILABLE', 'message': '当前三维为根相对坐标；未恢复真实水平轨迹，腾空高度存在单目歧义。'})
         # One translation for the whole sequence; never ground each frame separately.
-        height = smoothing.percentile([p[2] for f in output for name, p in f['body3d'].items()
-                                       if name.startswith(('ankle.', 'toe.', 'heel.'))], .05)
+        height = _ground_height(output)
         for frame in output:
             for key in ('body3d', 'hands3d'):
                 frame[key] = {name: (p[0], p[1], p[2] - height) for name, p in frame.get(key, {}).items()}
@@ -285,6 +330,8 @@ def process(frames, fps, options=None):
     for key in ('body3d', 'hands3d'):
         names = set().union(*(f.get(key, {}) for f in output))
         for name in names:
+            if name.startswith(('toe.', 'heel.')) and any(f.get('orientations') for f in output):
+                continue
             reliable = [confidence(f, name) >= .4 and name not in f.get('unreliable_joints', []) for f in output]
             if name.startswith(('ankle.', 'knee.', 'toe.', 'heel.')):
                 side = name[-1]
@@ -298,11 +345,12 @@ def process(frames, fps, options=None):
                     frame[key][name] = point
     lengths = constrain_lengths(output)
     strength = max(0., min(1., float(options.get('foot_lock_strength', .7))))
-    anchors = {}
+    anchors, planes = {}, {}
     previous_time = None
     for i, frame in enumerate(output):
         if previous_time is not None and frame['time'] - previous_time > 1.6 / fps:
             anchors.clear()
+            planes.clear()
         previous_time = frame['time']
         frame['contact_states'] = {side: states[side][i] for side in states}
         frame['contacts'] = {'foot.' + side: states[side][i] == 'contact' for side in states}
@@ -323,8 +371,17 @@ def process(frames, fps, options=None):
             # Root-relative backward motion during support is intentional locomotion.
             target = (anchor[0], anchor[1], grounds[side]) if space == 'world' else (ankle[0], ankle[1], grounds[side])
             if strength:
-                _leg_ik(frame['body3d'], side, rm.vec_lerp(ankle, target, strength), lengths)
+                _leg_ik(frame['body3d'], side, rm.vec_lerp(ankle, target, strength), lengths, planes=planes)
+    orientations.stabilize(output, gap, options.get('smoothing_strength', .65))
+    ground_origin_shift = _orientation_ground_origin(output, space)
     diagnostics = compare(before_smooth, output, fps)
+    diagnostics['ground_origin_shift_m'] = ground_origin_shift
+    diagnostics['orientation_coverage'] = {name: sum(f.get('orientation_quality', {}).get(name, {}).get('confidence', 0) >= .4
+                                                   for f in output)/len(output) for name in orientations.NAMES}
+    row_map = {row['sample_frame']: row for row in rows}
+    for frame in output:
+        if frame['frame'] in row_map and frame.get('orientation_quality'):
+            row_map[frame['frame']]['orientation_quality'] = frame['orientation_quality']
     diagnostics.update(processing_version=VERSION, motion_type=preset, coordinate_space=space,
                        root_trajectory_available=space == 'world',
                        contact_counts={side: {state: states[side].count(state) for state in ('contact', 'air', 'unknown')} for side in states})

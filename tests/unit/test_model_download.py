@@ -64,7 +64,7 @@ class ModelDownloadTests(unittest.TestCase):
     def test_unknown_ids_duplicate_paths_and_cycles_fail(self):
         with self.assertRaises(DownloadError):
             select_artifacts(self.manifest, artifact_ids=['missing'])
-        self.manifest.artifacts_by_id['rtmpose_m_body']['config_id'] = 'rtmpose_m_body'
+        self.manifest.artifacts_by_id['rtmpose_m_wholebody']['config_id'] = 'rtmpose_m_wholebody'
         with self.assertRaises(DownloadError):
             select_artifacts(self.manifest, ['quality'])
         self.manifest.artifacts[0]['relative_path'] = self.manifest.artifacts[1]['relative_path']

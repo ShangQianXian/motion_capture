@@ -150,8 +150,8 @@ BODY_CHAINS = (
     ),
     ChainSpec("spine_fk.003", source=("chest", "neck"), mode=MODE_AIM_REF, ref=REF_SHOULDER_LINE),
     ChainSpec("neck", source=("neck", "head"), mode=MODE_AIM_REF, ref=REF_SHOULDER_LINE),
-    # v0.1 has no head-top joint, so the head simply continues the neck.
-    ChainSpec("head", mode=MODE_IDENTITY),
+    # Legacy frames follow the neck; an optional anatomical orientation overrides this in v0.3.1.
+    ChainSpec("head", mode=MODE_IDENTITY, ref=REF_SHOULDER_LINE),
     # Arms.
     ChainSpec("shoulder.L", source=("chest", "shoulder.L"), mode=MODE_AIM),
     ChainSpec("upper_arm_fk.L", source=("shoulder.L", "elbow.L"), mode=MODE_AIM),
@@ -164,11 +164,11 @@ BODY_CHAINS = (
     # Legs.
     ChainSpec("thigh_fk.L", source=("hip.L", "knee.L"), mode=MODE_AIM),
     ChainSpec("shin_fk.L", source=("knee.L", "ankle.L"), mode=MODE_AIM),
-    ChainSpec("foot_fk.L", source=("ankle.L", "toe.L"), mode=MODE_AIM),
+    ChainSpec("foot_fk.L", source=("ankle.L", "toe.L"), mode=MODE_AIM, ref=REF_HIP_LINE),
     ChainSpec("toe_fk.L", mode=MODE_IDENTITY, aliases=("toe.L",)),
     ChainSpec("thigh_fk.R", source=("hip.R", "knee.R"), mode=MODE_AIM),
     ChainSpec("shin_fk.R", source=("knee.R", "ankle.R"), mode=MODE_AIM),
-    ChainSpec("foot_fk.R", source=("ankle.R", "toe.R"), mode=MODE_AIM),
+    ChainSpec("foot_fk.R", source=("ankle.R", "toe.R"), mode=MODE_AIM, ref=REF_HIP_LINE),
     ChainSpec("toe_fk.R", mode=MODE_IDENTITY, aliases=("toe.R",)),
 )
 

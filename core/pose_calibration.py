@@ -6,7 +6,7 @@ import copy
 import math
 import statistics
 
-from . import errors
+from . import errors, retarget_math as rm
 
 
 def estimate_standing_pitch(result, sample_limit: int = 120) -> float:
@@ -47,6 +47,8 @@ def calibrated_result(result, pitch: float):
     output = copy.deepcopy(result)
     cosine, sine = math.cos(pitch), math.sin(pitch)
     for frame in output.frames:
+        rotation = rm.quat_from_axis_angle((1, 0, 0), pitch)
+        frame.orientations = {name: rm.quat_mul(rotation, q) for name, q in frame.orientations.items()}
         pivot = frame.body3d["pelvis"]
         feet = [name for name in ("ankle.L", "ankle.R", "toe.L", "toe.R", "heel.L", "heel.R")
                 if name in frame.body3d]

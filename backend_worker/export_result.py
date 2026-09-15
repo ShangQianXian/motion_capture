@@ -43,7 +43,7 @@ def _serialise_frame(frame) -> dict:
         return frame.to_dict()
     body = frame.get("body3d") or {}
     hands = frame.get("hands3d") or {}
-    return {
+    payload = {
         "frame": int(frame.get("frame", 0)),
         "time": round(float(frame.get("time", 0.0)), 6),
         "body3d": {name: _round_vec(value) for name, value in body.items()},
@@ -51,6 +51,9 @@ def _serialise_frame(frame) -> dict:
         "confidence": _round_map(frame.get("confidence") or {}),
         "contacts": {name: bool(value) for name, value in (frame.get("contacts") or {}).items()},
     }
+    if frame.get('orientations'):
+        payload['orientations'] = {name: [round(float(v), 8) for v in q] for name, q in frame['orientations'].items()}
+    return payload
 
 
 def _round_vec(value) -> list:

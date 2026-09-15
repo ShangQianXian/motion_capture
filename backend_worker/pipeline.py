@@ -158,7 +158,7 @@ def run_job(job: dict, reporter, cancel_token=None, mock: bool = False) -> str:
     mode = str(job.get("mode") or job_schema.MODE_CAPTURE)
     model_section = job.get("model") or {}
     options = dict(job.get("options") or {})
-    options.setdefault('processing_version', '0.3')
+    options['processing_version'] = '0.3.1'
     options.setdefault('motion_type', 'general')
     options['coordinate_space'] = 'root_relative'
     options["_preview_rows"] = []
@@ -220,6 +220,10 @@ def run_job(job: dict, reporter, cancel_token=None, mock: bool = False) -> str:
             details={"path": str(input_section.get("path") or "")},
         )
 
+    from . import orientation_solver
+    meta = options.get('_preview_meta')
+    if meta and options['_preview_rows']:
+        orientation_solver.enrich(frames, options['_preview_rows'], (meta['width'], meta['height']), profile, cancel_token)
     raw_frames = copy.deepcopy(frames)
     frames, post_warnings = postprocess.postprocess(frames, fps, options, reporter)
     if profile in MMPOSE_PROFILES:
@@ -345,6 +349,9 @@ def _run_self_test(job: dict, reporter) -> str:
         reporter.loading_model(profile=effective, fraction=0.5)
         body2d = pose2d_mmpose.Body2DEstimator(models_root, effective, resolved_device, manifest, reporter)
         loaded.append(body2d.weights_id)
+        if effective == 'quality_plus':
+            extra = pose2d_mmpose.Body2DEstimator(models_root, 'quality_feet', resolved_device, manifest, reporter)
+            loaded.append(extra.weights_id)
         reporter.loading_model(profile=effective, fraction=0.8)
         pose3d_motionbert.Body3DLifter(models_root, resolved_device, manifest, reporter)
         loaded.append(pose3d_motionbert.LIFTER_WEIGHTS)
@@ -483,6 +490,8 @@ def _run_mediapipe(job, profile, manifest, reporter, cancel_token, options) -> t
                     "frame": frame_start + decoded.index,
                     "time": decoded.timestamp,
                     "body3d": body,
+                    '_face_world': {name: (float(world[0][j].x), float(world[0][j].z), -float(world[0][j].y))
+                                    for j, name in ((0, 'nose'), (7, 'left_ear'), (8, 'right_ear'))},
                     "hands3d": hands,
                     "confidence": confidence,
                     "contacts": {},
@@ -537,6 +546,7 @@ def _run_mmpose(job, profile, manifest, reporter, cancel_token, options) -> tupl
             raise
 
     requested_start = int(input_section.get('frame_start') or 1)
+    extra2d = pose2d_mmpose.Body2DEstimator(models_root, 'quality_feet', device, manifest, reporter) if profile == 'quality_plus' else None
     requested_end = int(input_section.get('frame_end') or 0)
     video_context = media_decode.resolve_media_type(input_section.get('path', ''), input_section.get('type', 'auto')) == 'video'
     context_start = max(1, requested_start - pose3d_motionbert.WINDOW_SIZE // 2) if video_context else requested_start
@@ -589,6 +599,11 @@ def _run_mmpose(job, profile, manifest, reporter, cancel_token, options) -> tupl
                 )
                 continue
             h36m_points, h36m_scores = pose2d_mmpose.coco17_to_h36m17(keypoints[:17], keypoint_scores[:17])
+            if extra2d is not None:
+                extra_points, extra_scores = extra2d.estimate(decoded.image, bbox)
+                if extra_points is not None:
+                    extra_points[:17], extra_scores[:17] = keypoints[:17], keypoint_scores[:17]
+                    keypoints, keypoint_scores = extra_points, extra_scores
             row["body2d"] = preview_export.coco_points(keypoints, keypoint_scores, decoded.width, decoded.height)
             row['pelvis2d'] = [(row['body2d'][11][axis] + row['body2d'][12][axis]) / 2 for axis in range(2)]
             if len(row['body2d']) >= 23:
@@ -623,9 +638,6 @@ def _run_mmpose(job, profile, manifest, reporter, cancel_token, options) -> tupl
         body, confidence = pose3d_motionbert.h36m_to_standard(
             lifted[index], valid_scores[index], scale
         )
-        if profile == 'quality_feet':
-            observation = next(row for row in options['_preview_rows'] if row['sample_frame'] == frame_number)
-            pose3d_motionbert.refine_feet_from_2d(body, observation['body2d'], image_size)
         frames.append(
             {
                 "frame": frame_number,

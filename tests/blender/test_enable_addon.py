@@ -66,7 +66,7 @@ def main() -> None:
 
     harness.section("bl_info")
     info = getattr(module, "bl_info", {})
-    harness.check_equal(info.get("version"), (0, 3, 0), "bl_info version")
+    harness.check_equal(info.get("version"), (0, 3, 1), "bl_info version")
     harness.check_equal(info.get("blender"), (4, 5, 0), "bl_info minimum Blender")
     harness.check_equal(info.get("category"), "Animation", "bl_info category")
 
