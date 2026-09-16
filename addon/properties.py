@@ -124,6 +124,16 @@ class MotionCaptureSceneProperties(bpy.types.PropertyGroup):
 
     # -- options -----------------------------------------------------------------------
 
+    camera_view: EnumProperty(name='素材相机视角',
+        description='左前以角色自身为准；45° 指水平夹角，相机整段固定，输出正前方为 -Y',
+        items=(('left_front_45', '固定左前 45°', '相机位于角色左前方；整体转换到角色坐标，保留真实转身'),
+               ('unspecified', '未指定／其他视角', '保留相机坐标，不使用左前 45° 假设')),
+        default='left_front_45', update=_capture_changed)
+
+    align_initial_facing: BoolProperty(name='初始朝向对齐 −Y',
+        description='用开头可信髋部朝向校准少量模型偏差；整段只转一次，保留之后的转身，冲突时提示',
+        default=True, update=_capture_changed)
+
     motion_type: EnumProperty(name='动作类型', description='只调整处理策略，不用动作模板替换素材',
         items=(('general', '通用／混合', '保守处理，适用于混合动作'), ('walk', '走路', '保留交替支撑和摆腿'),
                ('run', '跑步', '允许腾空和快速换脚'), ('attack', '攻击', '保留蓄力、快速动作和急停'),

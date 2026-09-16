@@ -47,6 +47,12 @@ def main():
                 'loading a review creates no scene objects or animation')
         h.check('预览' in review.apply_block_reason(scene), 'application requires a rendered review')
         h.check(value.state.manifest is None, 'legacy results remain loadable')
+        value.state.viewed = True
+        props.motion_type = props.motion_type
+        props.smoothing_strength = props.smoothing_strength
+        props.source_media = props.source_media
+        h.check(not value.state.stale and value.state.viewed,
+                'assigning unchanged capture values does not invalidate the review')
         props.motion_type = 'attack'
         h.check(value.state.stale, 'motion preset edits invalidate an old result')
         review.load_result(scene, path, restore_settings=True)

@@ -12,7 +12,7 @@ import copy
 import platform
 import sys
 
-from ._core import errors, job_schema, model_manifest, paths, preview, result_schema, skeleton
+from ._core import camera_alignment, orientations, errors, job_schema, model_manifest, paths, preview, result_schema, skeleton
 
 from . import export_result, mock_source, postprocess, preview_export
 
@@ -158,7 +158,7 @@ def run_job(job: dict, reporter, cancel_token=None, mock: bool = False) -> str:
     mode = str(job.get("mode") or job_schema.MODE_CAPTURE)
     model_section = job.get("model") or {}
     options = dict(job.get("options") or {})
-    options['processing_version'] = '0.3.1'
+    options['processing_version'] = orientations.VERSION
     options.setdefault('motion_type', 'general')
     options['coordinate_space'] = 'root_relative'
     options["_preview_rows"] = []
@@ -226,6 +226,12 @@ def run_job(job: dict, reporter, cancel_token=None, mock: bool = False) -> str:
         orientation_solver.enrich(frames, options['_preview_rows'], (meta['width'], meta['height']), profile, cancel_token)
     raw_frames = copy.deepcopy(frames)
     frames, post_warnings = postprocess.postprocess(frames, fps, options, reporter)
+    raw_frames, frames, calibration = camera_alignment.finalize(
+        raw_frames, frames, options, options.setdefault('_diagnostics', {}))
+    if calibration['initial_alignment'] not in ('disabled', 'aligned'):
+        post_warnings.append(dict(code='CAMERA_HEADING_REVIEW',
+            message='已应用左前 45° 相机坐标转换，但初始髋部朝向不够可靠或与视角冲突；未强行对齐，请核对正面与背面。'))
+        reporter.warning(post_warnings[-1]['code'], post_warnings[-1]['message'])
     if profile in MMPOSE_PROFILES:
         torch = sys.modules.get('torch')
         if torch is not None and torch.cuda.is_available():
@@ -242,6 +248,7 @@ def run_job(job: dict, reporter, cancel_token=None, mock: bool = False) -> str:
         source_type=str(input_section.get("type") or "video"),
         profile=profile,
         warnings=postprocess.summarise_warnings(warnings),
+        capture_transform=calibration,
     )
     result_path = export_result.write_result(
         result, output_section.get("dir"), output_section.get("result_filename")

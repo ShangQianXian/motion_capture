@@ -18,7 +18,7 @@ PREVIEW_LONG_SIDE = 960
 CAPTURE_FIELDS = (
     "source_type", "capture_profile", "frame_start", "frame_end", "target_fps",
     "include_hands", "smoothing_strength", "foot_lock_strength", "root_motion",
-    'motion_type',
+    'motion_type', 'camera_view', 'align_initial_facing',
 )
 
 # Actual detector topologies; synthetic standard-skeleton joints are not detections.
@@ -61,7 +61,8 @@ def source_matches(expected, path, relocated=False):
 
 
 def settings_snapshot(props):
-    return {key: getattr(props, key, 'general' if key == 'motion_type' else None) for key in CAPTURE_FIELDS}
+    defaults = dict(motion_type='general', camera_view='unspecified', align_initial_facing=False)
+    return {key: getattr(props, key, defaults.get(key)) for key in CAPTURE_FIELDS}
 
 
 def signature(settings):
@@ -197,28 +198,45 @@ class ReviewState:
         self.manifest = manifest
         self.settings = dict(settings)
         self.settings.setdefault('motion_type', 'general')
+        self.settings.setdefault('camera_view', 'unspecified')
+        self.settings.setdefault('align_initial_facing', False)
         self.source = dict(manifest["source"]) if manifest else fingerprint(source_path)
         self.source_path = source_path
         self.relocated = False
         self.viewed = False
         self.stale = False
+        self.stale_reason = ""
         self.correction = None
         self.transformed = None
         self.revision = 0
 
-    def invalidate(self):
+    def invalidate(self, reason="素材或捕捉参数已改变，请重新生成。"):
+        if self.stale:
+            return
         self.stale = True
+        self.stale_reason = reason
         self.viewed = False
         self.revision += 1
 
     def matches(self, settings, path):
+        return not self.mismatch_reason(settings, path)
+
+    def mismatch_reason(self, settings, path):
         if self.manifest and self.manifest.get('processing_version'):
             from .orientations import VERSION as processing_version
             if self.manifest['processing_version'] != processing_version:
-                return False
+                return "处理版本不一致：重启后加载，仍不匹配则重新生成。"
+        if self.stale:
+            return self.stale_reason
         current = dict(settings)
         current.setdefault('motion_type', 'general')
-        return not self.stale and settings_equal(self.settings, current) and paths.normalize(path) == paths.normalize(self.source_path)
+        current.setdefault('camera_view', 'unspecified')
+        current.setdefault('align_initial_facing', False)
+        if not settings_equal(self.settings, current):
+            return "捕捉参数已改变，请重新生成。"
+        if os.path.normcase(paths.normalize(path)) != os.path.normcase(paths.normalize(self.source_path)):
+            return "素材路径已改变，请重新生成或重新定位匹配的文件。"
+        return ""
 
     def media_matches(self):
         return source_matches(self.source, self.source_path, self.relocated)

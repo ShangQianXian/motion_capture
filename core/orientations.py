@@ -8,7 +8,7 @@ from __future__ import annotations
 from . import retarget_math as rm
 
 NAMES = ('head', 'foot.L', 'foot.R')
-VERSION = '0.3.1'
+VERSION = '0.3.2'
 
 
 def body_basis(body):

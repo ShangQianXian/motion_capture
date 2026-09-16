@@ -20,9 +20,10 @@ def build_result(
     source_type: str = "video",
     profile: str = "",
     warnings=None,
+    capture_transform=None,
 ) -> dict:
     """Assemble the ``mocap_result.json`` payload."""
-    return {
+    payload = {
         "version": result_schema.RESULT_VERSION,
         "source": {
             "path": source_path,
@@ -36,6 +37,9 @@ def build_result(
         "frames": [_serialise_frame(frame) for frame in frames],
         "warnings": list(warnings or []),
     }
+    if capture_transform is not None:
+        payload['capture_transform'] = capture_transform
+    return payload
 
 
 def _serialise_frame(frame) -> dict:

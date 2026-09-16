@@ -1,4 +1,6 @@
-# Motion Capture for Rigify (v0.3.1)
+# Motion Capture for Rigify (v0.3.2)
+
+v0.3.2 增加固定左前 45° 素材视角、初始朝向对齐 Blender 世界 −Y、背面与素材角预览。它修复相机坐标未转换导致的朝向错位，保留真实转身；不会把横向动作强制改成走路。使用方法、实测及深度限制见 [固定视角修复报告](docs/V0_3_CAMERA_ALIGNMENT.md)。
 
 v0.3 正式版修复迭代：脚掌改为观测驱动的独立朝向，头部支持独立转头、抬低头与歪头。修复证据和范围见 [头部与脚部修复报告](docs/V0_3_ORIENTATION_FIX.md)。四类动作的通用识别质量仍保留此前未通过项，详见 [历史验收记录](docs/V0_3_VALIDATION.md)。
 

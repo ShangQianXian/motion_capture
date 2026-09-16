@@ -7,7 +7,7 @@ import json
 import math
 import os
 
-from ._core import preview, skeleton
+from ._core import preview, skeleton, orientations
 
 
 def decoded_row(decoded, frame_start):
@@ -83,13 +83,14 @@ def write(job, result, result_path, rows, meta, profile, raw_frames=None, diagno
         payload['edges'] = list(preview.COCO_EDGES) + [(15, 17), (15, 18), (15, 19), (16, 20), (16, 21), (16, 22)]
     if diagnostics:
         payload['diagnostics'] = diagnostics
-        payload['processing_version'] = diagnostics.get('processing_version', '0.3.1')
+        payload['processing_version'] = diagnostics.get('processing_version', orientations.VERSION)
         payload['coordinate_space'] = diagnostics.get('coordinate_space', 'root_relative')
         payload['motion_type'] = diagnostics.get('motion_type', 'general')
     if raw_frames:
         from . import export_result
         raw = export_result.build_result(raw_frames, result['fps'], source_path=job['input']['path'],
-                                         source_type=job['input']['type'], profile=profile)
+                                         source_type=job['input']['type'], profile=profile,
+                                         capture_transform=result.get('capture_transform'))
         path = export_result.write_result(raw, os.path.dirname(result_path), 'mocap_raw.json')
         with open(path, 'rb') as handle:
             payload['stages'] = {'raw': {'file': 'mocap_raw.json', 'sha256': hashlib.sha256(handle.read()).hexdigest()}}

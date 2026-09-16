@@ -13,7 +13,7 @@ def main():
     h.reset_scene()
     module, operator=h.enable_addon()
     from motion_capture.backend_worker import export_result, mock_source
-    from motion_capture.core import result_schema, retarget_math as rm, orientations as ori
+    from motion_capture.core import result_schema, retarget_math as rm, orientations as ori, camera_alignment as ca
     from motion_capture.blender import rigify_adapter as adapter
     rig=h.generate_rigify_human()
     frames=mock_source.generate_frames(frame_start=1,frame_end=4,fps=24)
@@ -21,6 +21,16 @@ def main():
         f['orientations']={name:rm.quat_mul(rm.quat_from_axis_angle((0,0,1),.35*i),
                            rm.quat_from_axis_angle((1,0,0),.12*i)) for name in ori.NAMES}
         ori.apply_feet(f)
+    # The pipeline's camera transform must also survive Rigify rest transforms,
+    # parent inheritance and differently transformed armature objects.
+    camera_frames = ca.transform(frames, dict(camera_view='left_front_45',
+        quaternion_wxyz=rm.quat_from_axis_angle((0,0,1),-math.pi/4)))
+    calibration = ca.resolve(camera_frames, 'left_front_45', True)
+    h.check(calibration['initial_alignment']=='aligned','fixed camera initial facing aligns to -Y')
+    restored = ca.transform(camera_frames,calibration)
+    h.check(rm.vec_distance(frames[0]['body3d']['ankle.L'],restored[0]['body3d']['ankle.L'])<1e-8,
+            'camera conversion restores character-space ankle before Rigify')
+    frames = restored
     result=result_schema.MocapResult(export_result.build_result(frames,24))
     original=copy.deepcopy(result.data)
     for tilt,scale in ((0,1),(.4,1.7),(-.3,.6)):

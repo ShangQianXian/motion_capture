@@ -71,8 +71,10 @@ class Session:
         if self.suspend:
             return
         if self.state:
-            self.state.invalidate()
-        self.props.preview_playing = False
+            reason = self.state.mismatch_reason(preview.settings_snapshot(self.props), self.source_path())
+            if reason:
+                self.state.invalidate(reason)
+                self.props.preview_playing = False
 
     def stop_media(self):
         if self.media:
@@ -246,8 +248,7 @@ class Session:
                 self.media.close()
                 self.media = None
         if self.state:
-            if not self.state.matches(preview.settings_snapshot(self.props), self.source_path()):
-                self.state.invalidate()
+            self.invalidate()
             result = self.state.corrected(self.props.pitch_correction, self.props.flip_x)
             key = (self.state.correction, self.props.preview_stage)
             if self.settings_key != key or not self.pose_frames:
@@ -329,6 +330,8 @@ def load_result(scene, path, restore_settings=False):
     try:
         if restore_settings:
             props.motion_type = 'general'
+            props.camera_view = 'unspecified'
+            props.align_initial_facing = False
             for name, setting in (manifest or {}).get("capture_settings", {}).items():
                 if name in preview.CAPTURE_FIELDS:
                     setattr(props, name, setting)
@@ -387,8 +390,9 @@ def apply_block_reason(scene):
         return "请先生成或加载动捕结果。"
     if props.preview_stage != 'processed':
         return '请切换到处理后结果，核对最终动作再应用。'
-    if not state.matches(preview.settings_snapshot(props), value.source_path()):
-        return "素材或捕捉参数已改变，请重新生成。"
+    reason = state.mismatch_reason(preview.settings_snapshot(props), value.source_path())
+    if reason:
+        return reason
     if not state.media_matches():
         return "素材丢失或已改变，请重新定位匹配的文件。"
     if state.correction != (float(props.pitch_correction), bool(props.flip_x)) or not state.viewed:

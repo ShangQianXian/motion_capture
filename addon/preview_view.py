@@ -124,7 +124,9 @@ class MOCAP_OT_open_preview(bpy.types.Operator):
         self.scale = max(1.0, context.preferences.system.ui_scale, context.preferences.system.pixel_size)
         self.value.view = self
         self._closed = False
-        self.yaw, self.pitch, self.zoom = 0.0, 0.18, 1.0
+        calibration = self.value.state.result.data.get('capture_transform', {})
+        self.source_yaw = math.radians(calibration.get('applied_yaw_degrees', 0.0))
+        self.yaw, self.pitch, self.zoom = self.source_yaw, 0.18, 1.0
         self.drag = None
         self.buttons = []
         self.timeline = (0, 0, 0, 0)
@@ -247,11 +249,11 @@ class MOCAP_OT_open_preview(bpy.types.Operator):
         label("中键旋转 / 滚轮缩放", rx + 146, 137, 12, MUTED)
         if row and row.get('estimated_joints'):
             label("短线显示头 / 脚朝向；灰色为估算", rx + 12, 158, 11, MUTED)
-        self.button("正面", (rx + 8, height - 107, 52, 26), "front")
-        self.button("侧面", (rx + 64, height - 107, 52, 26), "side")
-        self.button("复位", (rx + 120, height - 107, 52, 26), "reset")
+        for index, (title, command) in enumerate((('正面', 'front'), ('背面', 'back'),
+                                                ('侧面', 'side'), ('素材角', 'source'), ('复位', 'reset'))):
+            self.button(title, (rx + 8 + index * 54, height - 107, 50, 26), command)
         if value.raw_result:
-            self.button('处理后' if props.preview_stage == 'raw' else '原始', (rx + 176, height - 107, 65, 26), 'stage')
+            self.button('处理后' if props.preview_stage == 'raw' else '原始', (rx + 278, height - 107, 60, 26), 'stage')
         if row and row.get('contact_states'):
             names = {'contact': '支撑', 'air': '离地', 'unknown': '未知'}
             label('L {0} / R {1}'.format(*(names.get(row['contact_states'].get(s), '未知') for s in ('L', 'R'))), rx, 111, 12, MUTED)
@@ -262,7 +264,7 @@ class MOCAP_OT_open_preview(bpy.types.Operator):
                       'low_confidence': '含低置信度关节', 'detected': '已检测'}.get(row.get('status'), '')
             label(status, margin, 111, 12, LOW if preview.is_problem(row) else MUTED)
         if value.state and value.state.stale:
-            label("素材或参数已改变，请重新生成", rx, 111, 12, LOW)
+            label(value.state.stale_reason, rx, 94, 12, LOW)
         if value.error:
             label(value.error[:100], margin, 94, 12, LOW)
         elif value.pending_id is not None:
@@ -343,6 +345,13 @@ class MOCAP_OT_open_preview(bpy.types.Operator):
             a, b = project((first[0] + n / 2, first[1] - 2, 0), False), project((first[0] + n / 2, first[1] + 2, 0), False)
             if inside(rect, *a) and inside(rect, *b):
                 line(a, b, (.15, .18, .23, 1), 1)
+        origin = (first[0], first[1], 0)
+        for direction, title, color in (((.4, 0, 0), '+X', RIGHT), ((0, -.4, 0), '−Y 前方', LEFT)):
+            a, b = project(origin, False), project(rm.vec_add(origin, direction), False)
+            if inside(rect, *a) and inside(rect, *b):
+                line(a, b, color, 2)
+                dot(b, color, 3)
+                label(title, b[0] + 4, b[1] + 5, 10, color)
         joints = dict(frame.body3d, **frame.hands3d)
         row = self.value.row(self.value.displayed_sample)
         estimated = row.get('estimated_joints', [])
@@ -399,9 +408,10 @@ class MOCAP_OT_open_preview(bpy.types.Operator):
             props.preview_loop = not props.preview_loop
         elif command == 'stage':
             props.preview_stage = 'raw' if props.preview_stage == 'processed' else 'processed'
-        elif command in ('front', 'side', 'reset'):
-            self.yaw = math.pi / 2 if command == 'side' else 0.0
-            self.pitch = 0.18 if command == 'reset' else 0.0
+        elif command in ('front', 'back', 'side', 'source', 'reset'):
+            self.yaw = {'front': 0., 'back': math.pi, 'side': math.pi / 2,
+                        'source': self.source_yaw, 'reset': self.source_yaw}[command]
+            self.pitch = 0.18 if command in ('source', 'reset') else 0.0
             self.zoom = 1.0
         elif command == 'apply':
             self.finish()

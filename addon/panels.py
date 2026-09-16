@@ -161,6 +161,9 @@ class MOCAP_PT_capture(_MocapPanel):
         column = layout.column()
         column.enabled = props.job_status not in ('running', 'applying')
         column.prop(props, "capture_profile")
+        column.prop(props, 'camera_view')
+        if props.camera_view == 'left_front_45':
+            column.prop(props, 'align_initial_facing')
         is_image = props.source_type == 'image' or (props.source_type == 'auto' and paths.guess_media_type(props.source_media) == 'image')
 
         if not is_image:
@@ -272,7 +275,7 @@ class MOCAP_PT_preview(_MocapPanel):
         layout.prop(props, 'pitch_correction')
         layout.operator('mocap.calibrate_pitch', icon='ORIENTATION_GLOBAL')
         if value.state.stale:
-            layout.label(text='素材或参数已改变，需要重新生成。', icon='ERROR')
+            layout.label(text=value.state.stale_reason, icon='ERROR')
         elif value.state.viewed:
             layout.label(text='当前预览已显示，可选择 Rigify 应用。', icon='CHECKMARK')
 

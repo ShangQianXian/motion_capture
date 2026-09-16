@@ -145,6 +145,12 @@ def validate_result(data, max_reported: int = 8) -> dict:
 
     problems = []
 
+    if 'capture_transform' in data:
+        calibration = data['capture_transform']
+        value = calibration.get('applied_yaw_degrees') if isinstance(calibration, dict) else None
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
+            problems.append('capture_transform 必须包含有限的 applied_yaw_degrees')
+
     version = str(data.get("version") or "")
     if version != RESULT_VERSION:
         problems.append("version 必须是 {0}，实际为 {1!r}".format(RESULT_VERSION, version))

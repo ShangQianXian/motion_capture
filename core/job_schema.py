@@ -221,6 +221,8 @@ def build_job(
             "models_root": models_root,
         },
         "options": {
+            "camera_view": _get(scene_props, 'camera_view', 'unspecified'),
+            "align_initial_facing": bool(_get(scene_props, 'align_initial_facing', False)),
             "motion_type": _get(scene_props, 'motion_type', 'general'),
             "processing_version": motion_processing.VERSION,
             "single_person": True,
@@ -254,6 +256,11 @@ def validate_job(job) -> dict:
         return job
 
     problems = []
+    from . import camera_alignment
+    if (job.get('options') or {}).get('camera_view', 'unspecified') not in camera_alignment.VIEWS:
+        problems.append('camera_view 必须为 unspecified 或 left_front_45')
+    if not isinstance((job.get('options') or {}).get('align_initial_facing', False), bool):
+        problems.append('align_initial_facing 必须为布尔值')
     if (job.get('options') or {}).get('motion_type', 'general') not in motion_processing.PRESETS:
         problems.append('motion_type 必须为 general、walk、run、attack 或 idle')
 

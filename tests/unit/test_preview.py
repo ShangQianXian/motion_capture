@@ -8,7 +8,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 
-from core import errors, preview, result_schema
+from core import errors, orientations, preview, result_schema
 from backend_worker import export_result, mock_source, preview_export, postprocess
 
 
@@ -51,6 +51,21 @@ class PreviewTests(unittest.TestCase):
         self.assertEqual(a.frames[0].body3d, b.frames[0].body3d)
         self.assertEqual(before, original.frames[0].body3d)
         self.assertNotEqual(before, a.frames[0].body3d)
+
+    def test_version_mismatch_has_its_own_reason(self):
+        manifest = {'source': {}, 'processing_version': 'old-version'}
+        state = preview.ReviewState(self.result(), manifest, {}, '')
+        reason = state.mismatch_reason({}, '')
+        self.assertIn('处理版本不一致', reason)
+        self.assertNotIn('参数已改变', reason)
+        self.assertFalse(state.matches({}, ''))
+        manifest['processing_version'] = orientations.VERSION
+        self.assertTrue(state.matches({}, ''))
+        state.invalidate(reason)
+        state.invalidate()
+        self.assertEqual(state.stale_reason, reason)
+        self.assertEqual(state.revision, 1)
+        self.assertFalse(state.matches({}, ''))
 
     def test_native_2d_coordinates_and_confidence_are_preserved(self):
         self.assertEqual(preview_export.coco_points([(960, 240)], [.2], 1920, 480), [[.5, .5, .2]])
