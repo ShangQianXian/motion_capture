@@ -12,10 +12,17 @@ the world-space displacement each direction produces. The displacement is the
 part that actually shows up on screen: a bone that is 10% too long moves its
 tail 10% of its own length away from where the capture put it.
 
-Run inside Blender::
+Measure your own scene (the file is opened, never saved)::
 
-    blender --background --factory-startup --python tools/validate_rig_proportions.py -- \
-        --folder .cache/v03-camera --positions
+    blender --background "C:\\path\\to\\your.blend" \
+        --python tools/validate_rig_proportions.py -- \
+        --armature "rig" --folder "C:\\path\\to\\capture" --positions
+
+Leave ``--armature`` out to take the first Rigify human found in the scene, and
+leave ``--folder`` pointing at any folder that has no capture to report the
+rig's own proportions only. ``--positions`` assigns a new Action to the rig, so
+it refuses to run when the rig already carries animation unless you pass
+``--allow-animated``.
 """
 from __future__ import annotations
 
@@ -168,24 +175,102 @@ def measure_positions(rig, result, scene_fps, root_scale, options):
     return {'samples': samples, 'summary': summary}
 
 
+def find_rigify_armature(adapter, name=""):
+    """Return ``(armature, note)`` for the rig to measure.
+
+    ``name`` selects a specific object; an empty name takes the first Rigify
+    human in the scene. Returning ``None`` lets the caller fall back to a freshly
+    generated rig rather than failing on an empty file.
+    """
+    if name:
+        armature = bpy.data.objects.get(name)
+        if armature is None:
+            raise SystemExit(
+                "找不到骨架对象 {0!r}。用 --armature 指定场景中的对象名；"
+                "不带 --armature 时会自动使用场景里的 Rigify 骨架。".format(name))
+        if getattr(armature, 'type', None) != 'ARMATURE':
+            raise SystemExit("{0!r} 不是骨架对象。".format(name))
+        detection = adapter.detect_rigify_human(armature)
+        if not detection.ok:
+            raise SystemExit("{0!r} 不是可用的 Rigify Human 骨架：{1}\n缺少的骨：{2}".format(
+                name, detection.error.message if detection.error else "未识别",
+                ", ".join(detection.missing_bones) or "无"))
+        return armature, "场景对象 {0!r}".format(name)
+    for armature in bpy.data.objects:
+        if getattr(armature, 'type', None) != 'ARMATURE':
+            continue
+        if adapter.detect_rigify_human(armature).ok:
+            return armature, "场景中自动找到的 Rigify 骨架 {0!r}".format(armature.name)
+    return None, ""
+
+
+def referenced_by_animation(armature):
+    """Animation on the rig that retargeting would replace.
+
+    Retargeting assigns a new Action, so an existing Action, NLA track or
+    shape-key animation would be displaced. Rigify's own drivers are *not*
+    reported: they are part of the rig, retargeting leaves them alone, and every
+    generated Rigify human has them, so flagging them would block the common
+    case for no reason.
+    """
+    found = []
+    animation = getattr(armature, 'animation_data', None)
+    if animation is not None:
+        if animation.action is not None:
+            found.append("Action {0!r}".format(animation.action.name))
+        if getattr(animation, 'nla_tracks', None):
+            found.append("{0} 条 NLA 轨道".format(len(animation.nla_tracks)))
+    shape_keys = getattr(getattr(armature, 'data', None), 'shape_keys', None)
+    if shape_keys is not None and shape_keys.animation_data is not None:
+        if shape_keys.animation_data.action is not None:
+            found.append("形态键 Action")
+    return found
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--folder', default=str(ROOT / '.cache/v03-camera'))
+    parser.add_argument('--folder', default=str(ROOT / '.cache/v03-camera'),
+                        help='cached capture folder holding mocap_result.json')
     parser.add_argument('--result', default='mocap_result.json')
+    parser.add_argument('--armature', default='',
+                        help='name of the armature object to measure; empty takes the '
+                             'first Rigify human found in the current scene')
     parser.add_argument('--output', default='')
     parser.add_argument('--positions', action='store_true',
                         help='also retarget onto the rig and measure world-space gaps')
+    parser.add_argument('--allow-animated', action='store_true',
+                        help='let --positions run on a rig that already has animation; '
+                             'it will assign a new Action and is not undoable in background mode')
     parser.add_argument('--fps', type=float, default=24.0)
     args = parser.parse_args(sys.argv[sys.argv.index('--') + 1:] if '--' in sys.argv else [])
 
-    harness.reset_scene()
     harness.enable_addon()
     from motion_capture.core import result_schema
     from motion_capture.blender import rigify_adapter as adapter
 
-    rig = harness.generate_rigify_human()
-    result = result_schema.load_mocap_result(str(Path(args.folder) / args.result))
-    capture = source_lengths(args.folder, args.result)
+    if args.armature:
+        # The user pointed at a scene object: leave their file exactly as it is.
+        rig, note = find_rigify_armature(adapter, args.armature)
+    else:
+        rig, note = find_rigify_armature(adapter)
+        if rig is None:
+            harness.reset_scene()
+            harness.enable_addon()
+            rig = harness.generate_rigify_human()
+            note = "当前场景没有 Rigify 骨架，改为生成一个默认骨架"
+    print("测量对象：{0}\n".format(note))
+
+    result_path = Path(args.folder) / args.result
+    if result_path.is_file():
+        result = result_schema.load_mocap_result(str(result_path))
+        capture = source_lengths(args.folder, args.result)
+    else:
+        # Without a capture the rig's own proportions are still worth reporting:
+        # comparing two rigs, or checking one against known anatomy, needs no
+        # motion data at all.
+        result, capture = None, {}
+        print("未找到 {0}，只报告骨架自身比例（无素材对照）。\n".format(result_path))
+
     rigged = rig_lengths(rig)
 
     # The retarget scales the root so the rig matches the capture's pelvis
@@ -193,27 +278,30 @@ def main():
     # rather than a proportional one.
     rig_pelvis = adapter.rig_pelvis_height(rig)
     heights = sorted(frame.body3d['pelvis'][2] for frame in result.frames
-                     if 'pelvis' in frame.body3d)
+                     if 'pelvis' in frame.body3d) if result else []
     source_pelvis = heights[len(heights) // 2] if heights else 0.0
     root_scale = rig_pelvis / source_pelvis if source_pelvis > 1e-3 else 1.0
 
     rows = []
     for label, _bones, _source in SEGMENTS:
-        if label not in capture or label not in rigged:
-            continue
-        expected = capture[label] * root_scale
-        ratio = rigged[label] / expected if expected > 1e-6 else float('nan')
-        rows.append({'segment': label, 'source_m': round(capture[label], 4),
-                     'rig_m': round(rigged[label], 4), 'expected_m': round(expected, 4),
-                     'ratio': round(ratio, 4), 'ok': abs(ratio - 1.0) <= TOLERANCE})
+        expected = capture.get(label, 0.0) * root_scale
+        ratio = rigged[label] / expected if label in rigged and expected > 1e-6 else None
+        rows.append({'segment': label,
+                     'source_m': round(capture[label], 4) if label in capture else None,
+                     'rig_m': round(rigged[label], 4) if label in rigged else None,
+                     'expected_m': round(expected, 4) if expected > 1e-6 else None,
+                     'ratio': round(ratio, 4) if ratio is not None else None,
+                     'ok': (abs(ratio - 1.0) <= TOLERANCE) if ratio is not None else None})
 
     report = {
         'object': rig.name,
+        'source': note,
+        'capture_result': str(result_path) if result is not None else None,
         'root_scale': round(root_scale, 4),
         'rig_pelvis_height_m': round(rig_pelvis, 4),
-        'source_pelvis_height_m': round(source_pelvis, 4),
+        'source_pelvis_height_m': round(source_pelvis, 4) if source_pelvis else None,
         'segments': rows,
-        'mismatched': [row['segment'] for row in rows if not row['ok']],
+        'mismatched': [row['segment'] for row in rows if row['ok'] is False],
     }
     stature = rig_stature(rig)
     if stature:
@@ -222,11 +310,21 @@ def main():
         # driven by the pelvis can ever make the feet land on the source.
         report['rig_leg_share_of_stature'] = round(
             (rigged.get('thigh.L', 0.0) + rigged.get('shin.L', 0.0)) / stature, 4)
-    if args.positions:
+    if args.positions and result is not None:
+        existing = referenced_by_animation(rig)
+        if existing and not args.allow_animated:
+            raise SystemExit(
+                "停止：{0!r} 上已有 {1}。--positions 会重定向并给它换上一个新 Action，"
+                "后台模式下无法撤销。\n"
+                "请改用 --armature 指向一个没有动画的骨架，或在不带 --positions 的情况下运行"
+                "（只测比例，不改动文件），\n"
+                "确认过风险后加 --allow-animated 强制执行。".format(rig.name, "、".join(existing)))
         options = adapter.RetargetOptions(include_hands=False, scene_fps=args.fps,
                                           root_motion='in_place', action_name='proportion check')
         measured = measure_positions(rig, result, args.fps, root_scale, options)
         report['positions'] = measured['summary']
+    elif args.positions:
+        print("跳过 --positions：需要一份捕捉结果才能重定向。\n")
     print(json.dumps(report, ensure_ascii=False, indent=2))
     if report['mismatched']:
         print('\n比例不匹配：这些骨段在重定向后末端会偏离素材位置（方向正确也一样）。')
