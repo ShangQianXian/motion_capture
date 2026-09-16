@@ -97,6 +97,10 @@ class CameraAlignmentTests(unittest.TestCase):
         self.assertTrue(state.matches({}, 'example.mp4'))
         self.assertFalse(state.matches(dict(camera_view='left_front_45'), 'example.mp4'))
         self.assertFalse(state.matches(dict(align_initial_facing=True), 'example.mp4'))
+        # The 2D input scale changes the lifted pose, so a cached review must be
+        # invalidated when it changes, and stay valid when it does not.
+        self.assertTrue(state.matches(dict(input_normalisation='current'), 'example.mp4'))
+        self.assertFalse(state.matches(dict(input_normalisation='canonical'), 'example.mp4'))
         self.assertEqual(restored.data['capture_transform'], c)
 
     def test_real_pipeline_exports_once_after_camera_space_fitting(self):

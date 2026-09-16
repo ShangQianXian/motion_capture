@@ -223,6 +223,7 @@ def build_job(
         "options": {
             "camera_view": _get(scene_props, 'camera_view', 'unspecified'),
             "align_initial_facing": bool(_get(scene_props, 'align_initial_facing', False)),
+            "input_normalisation": _get(scene_props, 'input_normalisation', 'current'),
             "motion_type": _get(scene_props, 'motion_type', 'general'),
             "processing_version": motion_processing.VERSION,
             "single_person": True,
@@ -263,6 +264,13 @@ def validate_job(job) -> dict:
         problems.append('align_initial_facing 必须为布尔值')
     if (job.get('options') or {}).get('motion_type', 'general') not in motion_processing.PRESETS:
         problems.append('motion_type 必须为 general、walk、run、attack 或 idle')
+    # Absent means "use the lifter's own default"; an explicit unknown value is a
+    # caller mistake and must not silently fall back. The canonical values live in
+    # backend_worker.pose3d_motionbert, which core/ (standard library only) cannot
+    # import; keep this tuple in step with its NORMALISATION_* constants.
+    declared = (job.get('options') or {}).get('input_normalisation')
+    if declared is not None and declared not in ('current', 'canonical'):
+        problems.append('input_normalisation 必须为 current 或 canonical')
 
     if not job.get("job_id"):
         problems.append("缺少 job_id")

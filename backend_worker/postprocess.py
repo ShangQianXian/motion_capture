@@ -71,10 +71,15 @@ def postprocess(
     store them in the result file.
     """
     options = options or {}
-    if options.get('processing_version') in ('0.3', '0.3.1', '0.3.2') or any(f.get('orientations') for f in frames):
+    if options.get('processing_version') in ('0.3', '0.3.1', '0.3.2', '0.3.3') or any(f.get('orientations') for f in frames):
         from ._core import motion_processing
         processed, warnings, diagnostics = motion_processing.process(frames, fps, options)
-        options['_diagnostics'] = diagnostics
+        # Merge instead of replacing: capture-side diagnostics (lifter input
+        # scaling, CUDA peaks) are written before this stage runs and would
+        # otherwise be dropped from the sidecar.
+        merged = options.setdefault('_diagnostics', {})
+        merged.update(diagnostics)
+        options['_diagnostics'] = merged
         for warning in warnings:
             _report(reporter, warning)
         return processed, warnings

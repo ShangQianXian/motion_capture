@@ -70,6 +70,10 @@ def scene_props(**overrides) -> Namespace:
         "smoothing_strength": 0.65,
         "foot_lock_strength": 0.7,
         "root_motion": "world",
+        "camera_view": "unspecified",
+        "align_initial_facing": False,
+        "motion_type": "general",
+        "input_normalisation": "current",
     }
     values.update(overrides)
     return Namespace(**values)

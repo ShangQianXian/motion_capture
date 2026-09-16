@@ -30,6 +30,27 @@ NOMINAL_PELVIS_TO_HEAD = 0.78
 #: Forward offset used to synthesise the missing toe joints, in metres.
 TOE_FORWARD_OFFSET = 0.16
 
+#: Input-normalisation modes accepted by :meth:`Body3DLifter.lift`.
+#:
+#: ``current`` feeds raw video pixels. ``MotionBERTLabel.encode`` then divides
+#: them by the *image* size, so the magnitude the network sees is decided by how
+#: much of the frame the subject happens to fill. ``canonical`` rebases the
+#: sequence into the H36M statistics below first, which is the distribution the
+#: checkpoint was trained on.
+NORMALISATION_CURRENT = "current"
+NORMALISATION_CANONICAL = "canonical"
+
+#: H36M mean bounding box shipped with MMPose (``_base_/datasets/h36m.py``,
+#: ``stats_info``). MotionBERT was trained on keypoints rebased onto this box,
+#: and the checkpoint assumes 2D input normalised to roughly ``[-1, 1]``, so a
+#: shorter subject moves that input out of distribution.
+CANONICAL_IMAGE_SIZE = (1000.0, 1000.0)
+CANONICAL_BBOX_CENTER = (528.0, 427.0)
+CANONICAL_BBOX_SCALE = 400.0
+
+#: Minimum sequence-wide keypoint spread, in pixels, that can be rebased.
+MIN_CANONICAL_SPREAD = 1.0
+
 
 def require_lifter_api():
     """Import MMPose's pose-lifting API lazily."""
@@ -65,6 +86,60 @@ def pad_sequence(sequence, window: int = WINDOW_SIZE) -> list:
     head = missing // 2
     tail = missing - head
     return [sequence[0]] * head + list(sequence) + [sequence[-1]] * tail
+
+
+def canonical_rebase(keypoints_seq, bboxes_seq=None):
+    """Rebase a 2D sequence onto the H36M bounding box the checkpoint expects.
+
+    The mapping is affine and shape-preserving: every frame is translated so the
+    subject sits on ``CANONICAL_BBOX_CENTER``, and the whole sequence is scaled
+    by one factor so its largest keypoint spread equals ``2 * CANONICAL_BBOX_SCALE``.
+
+    One factor for the entire sequence is deliberate. Dividing by a per-frame
+    bounding box would cancel exactly the apparent-size change that carries the
+    subject's depth, which is the only monocular depth cue available. This is
+    also what the reference implementation does: ``crop_scale`` in MotionBERT's
+    ``lib/utils/utils_data.py`` normalises a clip using its sequence-wide
+    bounding box, not a per-frame one.
+
+    Returns ``(keypoints, bboxes)``; both are rebased so the 2D evidence and the
+    boxes stay in the same frame. Returns the inputs unchanged when the sequence
+    has no usable spread, so a degenerate clip still produces a result object
+    instead of raising.
+    """
+    numpy = mm.require_numpy()
+    points = [numpy.asarray(item, dtype=numpy.float32) for item in keypoints_seq if item is not None]
+    if not points:
+        return keypoints_seq, bboxes_seq
+    stacked = numpy.concatenate(points, axis=0)
+    low = stacked[:, :2].min(axis=0)
+    high = stacked[:, :2].max(axis=0)
+    spread = float(max(high[0] - low[0], high[1] - low[1]))
+    if not numpy.isfinite(spread) or spread < MIN_CANONICAL_SPREAD:
+        return keypoints_seq, bboxes_seq
+    scale = 2.0 * CANONICAL_BBOX_SCALE / spread
+    center = numpy.asarray(CANONICAL_BBOX_CENTER, dtype=numpy.float32)
+
+    def rebase_points(item):
+        if item is None:
+            return None
+        array = numpy.asarray(item, dtype=numpy.float32).copy()
+        array[:, :2] = (array[:, :2] - low) * scale + center - CANONICAL_BBOX_SCALE
+        return array
+
+    rebased = [rebase_points(item) for item in keypoints_seq]
+    boxes = None
+    if bboxes_seq is not None:
+        boxes = []
+        for bbox in bboxes_seq:
+            if bbox is None:
+                boxes.append(None)
+                continue
+            array = numpy.asarray(bbox, dtype=numpy.float32)[:4].copy()
+            array[:2] = (array[:2] - low) * scale + center - CANONICAL_BBOX_SCALE
+            array[2:4] = (array[2:4] - low) * scale + center - CANONICAL_BBOX_SCALE
+            boxes.append(array)
+    return rebased, boxes
 
 
 def build_windows(count: int, window: int = WINDOW_SIZE) -> list:
@@ -133,6 +208,8 @@ class Body3DLifter(object):
         self._inference = inference_pose_lifter_model
         self._PoseDataSample = pose_sample
         self._InstanceData = instance_data
+        #: Input normalisation actually used by the last :meth:`lift` call.
+        self.last_normalisation = NORMALISATION_CURRENT
         active = manifest if manifest is not None else model_manifest.load_manifest(models_root)
         self.config = model_manifest.require_artifact(models_root, LIFTER_CONFIG, active)
         self.checkpoint = model_manifest.require_artifact(models_root, LIFTER_WEIGHTS, active)
@@ -180,16 +257,40 @@ class Body3DLifter(object):
         return samples
 
     def lift(self, keypoints_seq, scores_seq, image_size=None, bboxes_seq=None, cancel_token=None,
-             sample_fps=30., max_gap_seconds=.2):
-        """Lift a 2D sequence into ``(frames, 17, 3)`` root-relative coordinates."""
+             sample_fps=30., max_gap_seconds=.2, input_normalisation=NORMALISATION_CURRENT):
+        """Lift a 2D sequence into ``(frames, 17, 3)`` root-relative coordinates.
+
+        ``input_normalisation`` selects the 2D preprocessing:
+
+        * ``current`` keeps the historical behaviour and feeds raw video pixels.
+        * ``canonical`` rebases the sequence onto the H36M statistics first, so
+          the network sees the input scale it was trained on.
+
+        The returned coordinates are root-relative either way; the units are the
+        model's own and are rescaled by :func:`estimate_metric_scale`.
+        """
         numpy = mm.require_numpy()
         if len(keypoints_seq) == 0:
             return numpy.zeros((0, mm.H36M_KEYPOINT_COUNT, 3), dtype=numpy.float32)
+        if input_normalisation not in (NORMALISATION_CURRENT, NORMALISATION_CANONICAL):
+            raise errors.MocapError(
+                errors.JOB_SCHEMA_INVALID,
+                "未知的二维输入归一化模式：{0}".format(input_normalisation),
+                details={"input_normalisation": str(input_normalisation)},
+            )
         frame_count = len(keypoints_seq)
         if len(scores_seq) != frame_count or (bboxes_seq is not None and len(bboxes_seq) != frame_count):
             raise errors.MocapError(errors.INTERNAL_ERROR, "MotionBERT 输入序列长度不一致。")
         if image_size is None or len(image_size) != 2 or min(image_size) <= 0:
             raise errors.MocapError(errors.INTERNAL_ERROR, "MotionBERT 需要有效的图像宽高。")
+        self.last_normalisation = input_normalisation
+        if input_normalisation == NORMALISATION_CANONICAL:
+            keypoints_seq, bboxes_seq = canonical_rebase(keypoints_seq, bboxes_seq)
+            # The rebased keypoints no longer live in the video frame, so the
+            # width/height that ``MotionBERTLabel.encode`` divides by must be the
+            # canonical ones. Reusing the real video size here would scale the
+            # input straight back out of distribution.
+            image_size = CANONICAL_IMAGE_SIZE
         samples = self._to_samples(keypoints_seq, scores_seq, bboxes_seq)
         valid = [index for index, sample in enumerate(samples) if sample]
         if not valid:

@@ -58,6 +58,13 @@ def main():
         review.load_result(scene, path, restore_settings=True)
         value = review.session(scene)
         h.check(props.motion_type == 'general', 'legacy results restore a conservative motion preset')
+        # The 2D input scale changes the lifted pose, so it is a capture setting:
+        # editing it must invalidate, and an unchanged assignment must not.
+        value.state.viewed = True
+        props.input_normalisation = props.input_normalisation
+        h.check(not value.state.stale, 'unchanged input scale does not invalidate the review')
+        props.input_normalisation = 'canonical'
+        h.check(value.state.stale, 'changing the input scale invalidates an old result')
         h.check(not value.accept_frame({'request_id': -1, 'source_index': 999, 'path': str(source)}),
                 'outdated media replies cannot change displayed frames')
         value.pending_id, value.pending_source, value.pending_sample = 7, 4, 2

@@ -164,6 +164,7 @@ class MOCAP_PT_capture(_MocapPanel):
         column.prop(props, 'camera_view')
         if props.camera_view == 'left_front_45':
             column.prop(props, 'align_initial_facing')
+        column.prop(props, 'input_normalisation')
         is_image = props.source_type == 'image' or (props.source_type == 'auto' and paths.guess_media_type(props.source_media) == 'image')
 
         if not is_image:

@@ -1,4 +1,4 @@
-﻿"""Profile dispatch, degradation rules and environment checks.
+"""Profile dispatch, degradation rules and environment checks.
 
 Guide sections 4.2, 6.2 and 7. Every stage module is imported lazily so that a
 ``--mock`` run, ``--check-env`` and the unit tests work in a bare Python
@@ -238,6 +238,7 @@ def run_job(job: dict, reporter, cancel_token=None, mock: bool = False) -> str:
             options.setdefault('_diagnostics', {})['cuda_peak_allocated_mib'] = round(torch.cuda.max_memory_allocated() / 1024 ** 2, 2)
             options['_diagnostics']['cuda_peak_reserved_mib'] = round(torch.cuda.max_memory_reserved() / 1024 ** 2, 2)
     warnings = list(warnings) + list(post_warnings)
+    warnings.extend(_diagnose_reprojection(job, frames, calibration, options, reporter))
     if not preview.source_matches(source_identity, input_section['path']):
         raise errors.MocapError(errors.MEDIA_OPEN_FAILED, '素材在捕捉期间已改变，请重新生成。')
 
@@ -266,6 +267,35 @@ def run_job(job: dict, reporter, cancel_token=None, mock: bool = False) -> str:
 def _raise_if_cancelled(cancel_token) -> None:
     if cancel_token is not None and cancel_token.cancelled():
         raise errors.MocapError(errors.CANCELLED, "worker 收到取消请求。")
+
+
+def _diagnose_reprojection(job, frames, calibration, options, reporter) -> list:
+    """Compare the finished 3D result against the detections it came from.
+
+    This is the pipeline's only accuracy check: every other stage either
+    transforms the pose or cleans it up, and none of them can tell whether the
+    result still agrees with the video. A failure here is reported, never
+    silently corrected -- see ``backend_worker/reprojection.py`` for why.
+    """
+    meta = options.get('_preview_meta') or {}
+    rows = options.get('_preview_rows') or []
+    width, height = meta.get('width'), meta.get('height')
+    if not rows or not width or not height:
+        return []
+    try:
+        from . import reprojection
+        diagnostic = reprojection.diagnose(
+            frames, rows, (width, height),
+            {'camera_azimuth_degrees': calibration.get('applied_yaw_degrees'),
+             'sweep_azimuth': bool(options.get('reprojection_sweep_azimuth', True))})
+    except Exception as exc:  # diagnostics must never fail a good capture
+        reporter.debug("reprojection diagnostic skipped: {0}".format(exc))
+        return []
+    options.setdefault('_diagnostics', {})['reprojection'] = diagnostic
+    warnings = reprojection.findings(diagnostic)
+    for warning in warnings:
+        reporter.warning(warning['code'], warning['message'])
+    return warnings
 
 
 def _run_mock(job: dict, reporter, cancel_token) -> str:
@@ -521,6 +551,28 @@ def _translate(value, offset):
     return (value[0] + offset[0], value[1] + offset[1], value[2] + offset[2])
 
 
+def _bbox_fraction(bboxes_seq, image_size):
+    """Median subject size as a fraction of the frame's long side.
+
+    This is the quantity that used to decide the network's input magnitude;
+    recording it makes a mis-scaled capture visible in the sidecar instead of
+    only in the result.
+    """
+    if not bboxes_seq or not image_size:
+        return None
+    fractions = []
+    for bbox in bboxes_seq:
+        if bbox is None:
+            continue
+        width = float(bbox[2]) - float(bbox[0])
+        height = float(bbox[3]) - float(bbox[1])
+        fractions.append(max(width, height) / float(max(image_size)))
+    if not fractions:
+        return None
+    fractions.sort()
+    return round(fractions[len(fractions) // 2], 4)
+
+
 # --------------------------------------------------------------------------------------
 # MMPose branch (Phase 5)
 # --------------------------------------------------------------------------------------
@@ -630,14 +682,28 @@ def _run_mmpose(job, profile, manifest, reporter, cancel_token, options) -> tupl
     _raise_if_cancelled(cancel_token)
     reporter.loading_model(profile=profile, model_id=pose3d_motionbert.LIFTER_WEIGHTS, fraction=0.7)
     lifter = pose3d_motionbert.Body3DLifter(models_root, device, manifest, reporter)
+    # Default stays 'current': a subject that already fills a healthy share of
+    # the frame sits near the checkpoint's input distribution, and the benchmark
+    # in tools/benchmark_lifter.py shows the rebase is neutral there. It wins
+    # only when the subject is small in frame; set options.input_normalisation
+    # to 'canonical' after measuring with that benchmark.
+    normalisation = str(options.get("input_normalisation")
+                        or pose3d_motionbert.NORMALISATION_CURRENT)
     lifted = lifter.lift(keypoints_seq, scores_seq, image_size, bboxes_seq, cancel_token,
-                         sample_fps=source.fps, max_gap_seconds=.1 if options.get('motion_type') == 'attack' else .2)
+                         sample_fps=source.fps, max_gap_seconds=.1 if options.get('motion_type') == 'attack' else .2,
+                         input_normalisation=normalisation)
     valid_scores = [score for score in scores_seq if score is not None]
     if len(lifted) != len(frame_meta):
         raise errors.MocapError(errors.INTERNAL_ERROR, "MotionBERT 输出帧数与有效输入帧数不一致。")
 
     from statistics import median
     scale = median(pose3d_motionbert.estimate_metric_scale(pose) for pose in lifted) if len(lifted) else 1.0
+    diagnostics = options.setdefault('_diagnostics', {})
+    diagnostics['lifter_input_normalisation'] = normalisation
+    diagnostics['lifter_canonical_rebase'] = bool(
+        normalisation == pose3d_motionbert.NORMALISATION_CANONICAL)
+    diagnostics['lifter_metric_scale'] = round(float(scale), 6)
+    diagnostics['lifter_bbox_fraction'] = _bbox_fraction(bboxes_seq, image_size)
     frames = []
     for index, (frame_number, timestamp) in enumerate(frame_meta):
         if frame_number < requested_start or (requested_end and frame_number > requested_end):

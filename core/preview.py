@@ -18,7 +18,7 @@ PREVIEW_LONG_SIDE = 960
 CAPTURE_FIELDS = (
     "source_type", "capture_profile", "frame_start", "frame_end", "target_fps",
     "include_hands", "smoothing_strength", "foot_lock_strength", "root_motion",
-    'motion_type', 'camera_view', 'align_initial_facing',
+    'motion_type', 'camera_view', 'align_initial_facing', 'input_normalisation',
 )
 
 # Actual detector topologies; synthetic standard-skeleton joints are not detections.
@@ -61,7 +61,8 @@ def source_matches(expected, path, relocated=False):
 
 
 def settings_snapshot(props):
-    defaults = dict(motion_type='general', camera_view='unspecified', align_initial_facing=False)
+    defaults = dict(motion_type='general', camera_view='unspecified',
+                    align_initial_facing=False, input_normalisation='current')
     return {key: getattr(props, key, defaults.get(key)) for key in CAPTURE_FIELDS}
 
 
@@ -200,6 +201,7 @@ class ReviewState:
         self.settings.setdefault('motion_type', 'general')
         self.settings.setdefault('camera_view', 'unspecified')
         self.settings.setdefault('align_initial_facing', False)
+        self.settings.setdefault('input_normalisation', 'current')
         self.source = dict(manifest["source"]) if manifest else fingerprint(source_path)
         self.source_path = source_path
         self.relocated = False
@@ -232,6 +234,7 @@ class ReviewState:
         current.setdefault('motion_type', 'general')
         current.setdefault('camera_view', 'unspecified')
         current.setdefault('align_initial_facing', False)
+        current.setdefault('input_normalisation', 'current')
         if not settings_equal(self.settings, current):
             return "捕捉参数已改变，请重新生成。"
         if os.path.normcase(paths.normalize(path)) != os.path.normcase(paths.normalize(self.source_path)):

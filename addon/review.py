@@ -332,6 +332,7 @@ def load_result(scene, path, restore_settings=False):
             props.motion_type = 'general'
             props.camera_view = 'unspecified'
             props.align_initial_facing = False
+            props.input_normalisation = 'current'
             for name, setting in (manifest or {}).get("capture_settings", {}).items():
                 if name in preview.CAPTURE_FIELDS:
                     setattr(props, name, setting)

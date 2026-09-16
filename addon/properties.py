@@ -134,6 +134,14 @@ class MotionCaptureSceneProperties(bpy.types.PropertyGroup):
         description='用开头可信髋部朝向校准少量模型偏差；整段只转一次，保留之后的转身，冲突时提示',
         default=True, update=_capture_changed)
 
+    input_normalisation: EnumProperty(name=ui_text.PROP_INPUT_NORMALISATION,
+        description=ui_text.PROP_INPUT_NORMALISATION_DESC,
+        items=(('current', '跟随画面比例（推荐）',
+                '直接使用原图像素；人物占画面长边 50%–90% 时精度最好'),
+               ('canonical', '规范尺度（人物偏小时用）',
+                '把整段序列重定基到 H36M 训练尺度；对取景不敏感，人物偏小时明显更稳')),
+        default='current', update=_capture_changed)
+
     motion_type: EnumProperty(name='动作类型', description='只调整处理策略，不用动作模板替换素材',
         items=(('general', '通用／混合', '保守处理，适用于混合动作'), ('walk', '走路', '保留交替支撑和摆腿'),
                ('run', '跑步', '允许腾空和快速换脚'), ('attack', '攻击', '保留蓄力、快速动作和急停'),
