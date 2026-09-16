@@ -27,12 +27,17 @@ def main():
     source = copy.deepcopy(result.frames[0].body3d)
     mapping = adapter.build_rigify_mapping(rig, include_hands=False)
     original_height = mapping.pelvis_height
+    # Foot correction is off for this test on purpose. It re-solves the legs so the
+    # ankles land where the capture put them, which by design moves the leg bones
+    # off the exact source direction this test asserts. See
+    # tests/blender/test_foot_correction.py for the corrected behaviour.
     for degrees, size in ((0.,1.), (30.,1.7), (-25.,.6)):
         rig.location = (3.,-2.,1.)
         rig.rotation_euler = (math.radians(degrees),0.,.3)
         rig.scale = (size,)*3
         bpy.context.view_layer.update()
-        adapter.retarget_to_rigify(result,rig,adapter.RetargetOptions(include_hands=False))
+        adapter.retarget_to_rigify(result,rig,adapter.RetargetOptions(include_hands=False,
+                                                                     foot_correction=False))
         errors = []
         for frame in result.frames:
             bpy.context.scene.frame_set(frame.frame)

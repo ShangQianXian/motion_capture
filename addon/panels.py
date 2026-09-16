@@ -338,6 +338,7 @@ class MOCAP_PT_rigify(_MocapPanel):
         layout.prop(props, 'show_advanced', icon='TRIA_DOWN' if props.show_advanced else 'TRIA_RIGHT', emboss=False)
         if props.show_advanced:
             box = layout.box()
+            box.prop(props, 'foot_correction')
             box.prop(props, 'switch_limbs_to_fk')
             box.prop(props, 'frame_step')
             column = box.column(align=True)

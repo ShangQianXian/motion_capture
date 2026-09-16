@@ -150,16 +150,39 @@
 
 同一份结果的方向误差是 **0.0°**（`tools/validate_orientation_blender.py`：头、双脚、大腿、小腿全部 0.0°）。也就是说：**重定向的方向传得完全正确，偏差全部来自骨长**。
 
-结论：**继续改重建或后处理不会有收益**。要消除这 6.5 cm，只能在重定向一侧解决——把目标骨架的骨长比例对齐素材，或者在写入后按素材关节位置做一次末端位置校正。两者都会改变用户的骨架，属于需要确认的产品决策。
+结论：**继续改重建或后处理不会有收益**。要消除这 6.5 cm，只能在重定向一侧解决——把目标骨架的骨长比例对齐素材（方案 A），或者在写入后按素材关节位置做一次末端位置校正（方案 B）。A 会改变角色的外形轮廓，B 不会。
 
-## 7. 验证
+## 7. 方案 B：足部落点校正（已实现，默认开启）
 
+`blender/foot_ik.py`：方向写完后，按素材的脚踝位置重新求解每条腿。
+
+**做法**：以素材脚踝（按重定向同一比例缩放后的绝对位置）为目标，用骨架自己的大小腿长度做两骨 IK。髋保持重定向给的位置，**膝盖是唯一能动的关节**——髋和脚都定死之后，比例不匹配的腿不可能让膝盖也回到原位。弯曲平面取自素材膝盖相对髋踝轴的偏移，并跨帧带记忆，避免腿伸直时膝盖翻转。
+
+**实测（真实 192 帧 + Rigify 生成骨架）**：
+
+| 指标 | 只传方向 | 足部校正 |
+|---|---:|---:|
+| 左踝落点偏差（中位） | 11.6 cm | **3.2 cm** |
+| 右踝落点偏差（中位） | 4.8 cm | **2.8 cm** |
+| 目标超出腿长可及范围 | — | 3/192 帧（已告警） |
+| 腿整体朝向变化 | 1.34° | 6.47° |
+| 膝盖位置偏差 | 11.6 cm | **6.2 cm** |
+| 膝盖抖动（二阶差分中位） | 0.0041 | 0.0043 |
+| 脚踝抖动（二阶差分中位） | 0.0091 | 0.0089 |
+
+**代价说清楚**：腿的朝向会变约 6°。这是把髋（来自重定向）和脚（来自素材）都钉死之后的必然结果，不是实现缺陷。膝盖位置反而更接近素材，抖动没有变差，剩下 3.2/2.8 cm 来自那 3 帧超出可及范围的目标。
+
+UI 在「3 · 确认并应用」的高级选项里，名为**足部落点校正**，默认开启；关掉即回到只传方向。
+
+## 8. 验证
+
+- `tests/unit/test_foot_ik_math.py`（8 项）：两骨 IK 的落点精度、骨长保持、弯曲平面跟随 hint、超出可及范围时如实返回 `reached=False`、退化输入不产生 NaN、方向与距离分别由哪一侧提供。
 - `tests/worker/test_lifter_normalisation.py`（11 项）：重定基的仿射性、整段共用缩放（帧间相对大小保留）、bbox 一致、缺帧与退化输入、模式校验、默认模式不改变历史输入。
 - `tests/worker/test_reprojection.py`（6 项）：已知相机可被反解、记录视角填错会报冲突、噪声抬高的残差会被报出而不是被隐藏、沿光轴运动被标为深度主导、观测不足不评分、低置信度关节不参与评分。
 - `tests/unit/test_input_normalisation_setting.py`（12 项）：属性声明与默认值、job 携带与校验、快照／签名／比对识别改动、旧结果缺字段时回退、worker 侧转发与记录。
-- 375 项单元测试、39 项 worker 测试全部通过。
-- **Blender 4.5.0 全量通过**：`test_enable_addon` 54 / `test_mock_retarget` 63 / `test_retarget_coordinates` 16 / `test_motion_presets` 26 / `test_orientations` 103 / `test_review_workflow` 43 / `test_review_reload` 5 项检查，0 失败；`validate_orientation_blender.py` 在 192 帧真实结果上方向误差 0.0°。
-- 真实 Blender 属性实测：默认 `current`，选项 `current` / `canonical`，标签“跟随画面比例（推荐）”／“规范尺度（人物偏小时用）”，赋值后快照同步。
-- `tools/benchmark_lifter.py` 的 5 个取景场景 × 2 种模式结果落在 `.cache/lifter-benchmark.json`。
-- `tools/validate_rig_proportions.py --positions` 结果落在 `.cache/v03-camera/rig-proportions.json`。
-- **未验证**：`canonical` 未在真实素材上端到端跑过完整 Quality 捕捉（只在合成基准与 UI／job 链路上验证过）；本次测得的比例偏差是 Rigify 默认生成的骨架，用户项目中的骨架需自行复测。
+- 383 项单元测试、39 项 worker 测试（两套环境）全部通过。
+- **Blender 4.5.0 全量通过**：`test_enable_addon` 54 / `test_mock_retarget` 63 / `test_retarget_coordinates` 16 / `test_motion_presets` 26 / `test_orientations` 103 / `test_review_workflow` 43 / `test_review_reload` 5 项检查，0 失败。
+- **确定性**：同一份 `RetargetOptions` 连续应用三次，99 条曲线逐位一致（含足部校正）。这点曾经不成立，原因是读取 `pose_bone.head/matrix` 依赖依赖图的刷新时机；现已改为从源数据解析计算。
+- **旧安装副本会拦住**：`tools/validate_rig_proportions.py` 会比对 Blender 实际加载的插件路径与本仓库，不一致时直接停止并说明解决办法——否则会拿旧代码测出昨天的数字。
+- `tools/validate_rig_proportions.py --positions` 同时输出 `direction_only` 与 `foot_corrected` 两组数字。
+- **未验证**：以上比例与落点数字来自 Rigify 默认生成的骨架，用户自己的骨架需用同一脚本复测；足部校正只在缓存的 192 帧结果上验证，未跑完整的"真实素材 → 捕捉 → 应用"全链路。

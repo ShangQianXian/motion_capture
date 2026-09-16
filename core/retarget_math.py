@@ -348,3 +348,56 @@ def aim_rotation_with_reference(
 
 def clamp(value: float, low: float, high: float) -> float:
     return low if value < low else (high if value > high else value)
+
+
+#: Below this distance between a two-bone chain's ends the bend plane is undefined.
+FIXED_DIRECTION_EPSILON = 1e-6
+
+
+def three_bone_ik(hip, target, upper: float, lower: float, previous_knee=None):
+    """Place a two-bone chain so its endpoint lands on ``target``.
+
+    ``upper`` and ``lower`` are the two bone lengths as the *target* skeleton has
+    them; the endpoint is reached exactly wherever that is possible, and the
+    chain is straightened towards the target when it is out of range. The bend
+    plane is taken from ``previous_knee`` so the joint keeps bending the way it
+    already did, which is what stops a knee from crossing or flipping.
+
+    Returns ``(knee, ankle, reached)``. ``reached`` is False when the target had
+    to be clamped, which the caller should report rather than hide.
+
+    Pure geometry: no bpy, no rig, so it is testable on its own.
+    """
+    hip = tuple(float(v) for v in hip)
+    target = tuple(float(v) for v in target)
+    offset = vec_sub(target, hip)
+    measured = vec_length(offset)
+    reach = upper + lower
+    shortest = abs(upper - lower)
+    reached = True
+    if measured > reach:
+        # Fully extended; the endpoint cannot get any closer than this.
+        distance, reached = reach, False
+    elif measured < shortest:
+        distance, reached = shortest, False
+    else:
+        distance = measured
+
+    direction = (0.0, 0.0, -1.0) if measured < FIXED_DIRECTION_EPSILON else vec_scale(offset, 1.0 / measured)
+    denominator = 2.0 * max(distance, FIXED_DIRECTION_EPSILON)
+    along = (upper * upper - lower * lower + distance * distance) / denominator
+    bend = math.sqrt(upper * upper - along * along) if upper * upper > along * along else 0.0
+    # The bend plane comes from where the knee already is, projected off the
+    # hip-to-target axis. A straight leg says nothing about the plane, so fall
+    # back to any perpendicular rather than leaving the bend undefined.
+    plane = None
+    if previous_knee is not None:
+        axis = vec_sub(previous_knee, hip)
+        component = vec_sub(axis, vec_scale(direction, vec_dot(axis, direction)))
+        if vec_length(component) > FIXED_DIRECTION_EPSILON:
+            plane = vec_normalize(component)
+    if plane is None:
+        plane = any_perpendicular(direction)
+    knee = vec_add(vec_add(hip, vec_scale(direction, along)), vec_scale(plane, bend))
+    ankle = target if reached else vec_add(hip, vec_scale(direction, distance))
+    return knee, ankle, reached

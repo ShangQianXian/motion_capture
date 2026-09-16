@@ -190,6 +190,11 @@ class MotionCaptureSceneProperties(bpy.types.PropertyGroup):
         description=ui_text.PROP_SWITCH_FK_DESC,
         default=True,
     )
+    foot_correction: BoolProperty(
+        name=ui_text.PROP_FOOT_CORRECTION,
+        description=ui_text.PROP_FOOT_CORRECTION_DESC,
+        default=True,
+    )
     flip_x: BoolProperty(
         update=_correction_changed,
         name=ui_text.PROP_FLIP_X,

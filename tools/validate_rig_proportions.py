@@ -126,6 +126,15 @@ def measure_positions(rig, result, scene_fps, root_scale, options):
     The rig is driven by the real retargeting code and read back through the
     dependency graph, so what is measured is the pose the animator would see,
     not a re-derivation of it.
+
+    Two numbers per joint:
+      * ``ankle_gap_m`` -- how far the rig's ankle is from where the capture put
+        the ankle, scaled the way the retarget scales it. This is the visible
+        offset a user reports as the feet not matching the video.
+      * ``direction_error_deg`` -- how far the leg points off the source's
+        direction. Direction is what the retarget transfers, so this stays near
+        zero whether or not the foot correction is on; it is reported to show
+        that closing the ankle gap did not bend the limb off the video.
     """
     from motion_capture.blender import rigify_adapter as adapter
     from mathutils import Vector
@@ -150,11 +159,35 @@ def measure_positions(rig, result, scene_fps, root_scale, options):
             tail = rig.matrix_world @ pose_bone.tail
             source_head = Vector(frame.body3d[start_joint]) * root_scale
             source_tail = Vector(frame.body3d[end_joint]) * root_scale
+            source_vector = source_tail - source_head
             # Align both chains on the same joint head: the question is how far
             # the rig's own bone length moves the tail away from the capture.
             row[bone_name] = {
-                'error_m': round((tail - head).length - (source_tail - source_head).length, 4),
-                'tail_gap_m': round(((head + (source_tail - source_head)) - tail).length, 4),
+                'error_m': round((tail - head).length - source_vector.length, 4),
+                'tail_gap_m': round(((head + source_vector) - tail).length, 4),
+            }
+        # Whole-leg numbers, from the rig's own ankle to the capture's ankle.
+        for side in ('L', 'R'):
+            thigh = rig.pose.bones.get('thigh_fk.' + side)
+            shin = rig.pose.bones.get('shin_fk.' + side)
+            hip_joint, ankle_joint = 'hip.' + side, 'ankle.' + side
+            if thigh is None or shin is None:
+                continue
+            if hip_joint not in frame.body3d or ankle_joint not in frame.body3d:
+                continue
+            rig_hip = rig.matrix_world @ thigh.head
+            rig_ankle = rig.matrix_world @ shin.tail
+            source_hip = Vector(frame.body3d[hip_joint]) * root_scale
+            source_ankle = Vector(frame.body3d[ankle_joint]) * root_scale
+            source_leg = source_ankle - source_hip
+            rig_leg = rig_ankle - rig_hip
+            angle = 0.0
+            if rig_leg.length > 1e-6 and source_leg.length > 1e-6:
+                cosine = max(-1.0, min(1.0, rig_leg.normalized().dot(source_leg.normalized())))
+                angle = math.degrees(math.acos(cosine))
+            row['leg.' + side] = {
+                'ankle_gap_m': round((rig_ankle - source_ankle).length, 4),
+                'direction_error_deg': round(angle, 3),
             }
         samples.append(row)
 
@@ -171,6 +204,20 @@ def measure_positions(rig, result, scene_fps, root_scale, options):
             'median_length_error_m': round(errors[len(errors) // 2], 4),
             'median_tail_gap_m': round(gaps[len(gaps) // 2], 4),
             'max_tail_gap_m': round(gaps[-1], 4),
+        }
+    for side in ('L', 'R'):
+        key = 'leg.' + side
+        present = [sample[key] for sample in samples if key in sample]
+        if not present:
+            continue
+        gaps = sorted(item['ankle_gap_m'] for item in present)
+        angles = sorted(item['direction_error_deg'] for item in present)
+        summary[key] = {
+            'source_joint': 'hip.{0}->ankle.{0}'.format(side),
+            'median_ankle_gap_m': round(gaps[len(gaps) // 2], 4),
+            'max_ankle_gap_m': round(gaps[-1], 4),
+            'median_direction_error_deg': round(angles[len(angles) // 2], 3),
+            'max_direction_error_deg': round(angles[-1], 3),
         }
     return {'samples': samples, 'summary': summary}
 
@@ -227,6 +274,31 @@ def referenced_by_animation(armature):
     return found
 
 
+def report_addon_origin(module):
+    """Say which copy of the add-on is under test, and refuse a stale one.
+
+    ``harness.enable_addon()`` prefers Blender's ``addon_enable``, which loads
+    whatever is in the user's add-on directory. If that is a copied install
+    rather than the junction ``tools/dev_install.ps1`` creates, this script would
+    silently measure old code -- and report yesterday's numbers as today's
+    result. A mismatch is therefore an error, not a note.
+    """
+    loaded = Path(getattr(module, '__file__', '') or '').resolve()
+    expected = (ROOT / '__init__.py').resolve()
+    if not loaded or loaded == expected:
+        return "插件来源：{0}\n".format(loaded or 'unknown')
+    raise SystemExit(
+        "停止：Blender 加载的不是本次修改的插件。\n"
+        "  实际加载：{0}\n"
+        "  本仓库　：{1}\n"
+        "这是一份旧副本（通常来自 zip 安装或手工复制）。直接跑会测到旧代码。\n"
+        "解决办法（任选）：\n"
+        "  1. 用仓库版本覆盖安装：tools\\dev_install.ps1（会建目录联接，之后自动同步）\n"
+        "  2. 加 --factory-startup 运行，插件改从本仓库导入\n"
+        "  3. 手工把 {2} 复制到上面那个目录".format(
+            loaded, expected, ROOT))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--folder', default=str(ROOT / '.cache/v03-camera'),
@@ -244,7 +316,8 @@ def main():
     parser.add_argument('--fps', type=float, default=24.0)
     args = parser.parse_args(sys.argv[sys.argv.index('--') + 1:] if '--' in sys.argv else [])
 
-    harness.enable_addon()
+    module, _used_operator = harness.enable_addon()
+    print(report_addon_origin(module))
     from motion_capture.core import result_schema
     from motion_capture.blender import rigify_adapter as adapter
 
@@ -319,10 +392,22 @@ def main():
                 "请改用 --armature 指向一个没有动画的骨架，或在不带 --positions 的情况下运行"
                 "（只测比例，不改动文件），\n"
                 "确认过风险后加 --allow-animated 强制执行。".format(rig.name, "、".join(existing)))
-        options = adapter.RetargetOptions(include_hands=False, scene_fps=args.fps,
-                                          root_motion='in_place', action_name='proportion check')
-        measured = measure_positions(rig, result, args.fps, root_scale, options)
-        report['positions'] = measured['summary']
+        # Measure both ways: the gap the rig produces on its own, and the gap after
+        # the foot correction. Reporting only the corrected number would hide what
+        # the correction is actually buying.
+        measured = {}
+        for label, enabled in (('direction_only', False), ('foot_corrected', True)):
+            options = adapter.RetargetOptions(include_hands=False, scene_fps=args.fps,
+                                              root_motion='in_place',
+                                              action_name='proportion check ' + label,
+                                              foot_correction=enabled)
+            try:
+                measured[label] = measure_positions(rig, result, args.fps, root_scale, options)['summary']
+            except SystemExit:
+                raise
+            except Exception as exc:  # a missing chain must not lose the whole report
+                measured[label] = {'error': '{0}: {1}'.format(type(exc).__name__, exc)}
+        report['positions'] = measured
     elif args.positions:
         print("跳过 --positions：需要一份捕捉结果才能重定向。\n")
     print(json.dumps(report, ensure_ascii=False, indent=2))

@@ -731,6 +731,7 @@ class MOCAP_OT_apply_to_rigify(bpy.types.Operator):
         self._options = rigify_adapter.RetargetOptions(
             root_motion=props.root_motion, include_hands=props.include_hands,
             switch_limbs_to_fk=props.switch_limbs_to_fk, flip_x=props.flip_x,
+            foot_correction=props.foot_correction,
             frame_step=props.frame_step, pitch_correction=props.pitch_correction,
             scene_fps=context.scene.render.fps / context.scene.render.fps_base,
             start_time=value.rows[0]["time"] if value.rows else state.result.frames[0].time,

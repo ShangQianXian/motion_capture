@@ -305,6 +305,7 @@ class RetargetOptions(object):
         "progress",
         "pitch_correction",
         "scene_fps", "start_time", "created_action",
+        "foot_correction", "_foot_correction",
     )
 
     def __init__(
@@ -320,6 +321,7 @@ class RetargetOptions(object):
         pitch_correction: float = 0.0,
         scene_fps=None,
         start_time=None,
+        foot_correction: bool = True,
     ) -> None:
         self.root_motion = root_motion
         self.include_hands = bool(include_hands)
@@ -330,6 +332,11 @@ class RetargetOptions(object):
         self.action_name = action_name
         self.progress = progress
         self.pitch_correction = float(pitch_correction)
+        # Re-solve the legs onto the capture's foot placement. On by default: a rig
+        # whose segments differ in length otherwise puts the feet centimetres away
+        # from where the video has them, which is what users report as drift.
+        self.foot_correction = bool(foot_correction)
+        self._foot_correction = None
         self.scene_fps = scene_fps
         self.start_time = start_time
         self.created_action = None
@@ -505,6 +512,45 @@ def _restore(armature, previous_active, previous_mode) -> None:
             pass
 
 
+def _hips_in_pose_space(armature, frame, chains, scale, origin, options):
+    """Where the direction pass put each hip, in armature space, without reading the pose.
+
+    The foot correction needs each leg's hip position. Reading it back from
+    ``pose_bone.head`` works, but that value only settles once the dependency
+    graph is evaluated, which made the correction non-reproducible: applying the
+    same options twice produced slightly different Actions. Recomputing it from
+    the source data gives the identical answer every time.
+
+    This mirrors what the direction pass did to the pelvis: place it at the
+    scaled source position, drop the origin, then apply the in-place rule.
+    Returns ``{'L': (x, y, z), 'R': (...)}`` in armature space; sides that cannot
+    be resolved are absent and the correction skips them.
+    """
+    pelvis = frame.body3d.get('pelvis')
+    if pelvis is None or not chains:
+        return {}
+    root_bone = armature.data.bones.get(chains[0].bone_name) or armature.data.bones.get('torso')
+    if root_bone is None:
+        return {}
+    delta = rm.vec_sub(rm.vec_scale(pelvis, scale), origin)
+    if options.root_motion == 'in_place':
+        delta = (0.0, 0.0, delta[2])
+    local = armature.matrix_world.inverted().to_3x3() @ Vector(delta)
+    pelvis_head = (Matrix.Translation(local) @ root_bone.matrix_local).translation
+    # Hip offset relative to the pelvis is a rest-pose constant; cache it on the
+    # correction's own prepared data (bpy objects reject arbitrary attributes).
+    offsets = getattr(options, '_foot_correction', None)
+    if offsets is None:
+        return {}
+    offsets = offsets.setdefault('hip_offsets', {})
+    if not offsets:
+        for side in ('L', 'R'):
+            leg = armature.data.bones.get('thigh_fk.' + side)
+            if leg is not None:
+                offsets[side] = leg.head_local - root_bone.head_local
+    return {side: tuple(pelvis_head + offset) for side, offset in offsets.items()}
+
+
 def _retarget_generator(result, armature, options=None):
     """Insert keyframes on Rigify control bones from a mocap result.
 
@@ -555,6 +601,10 @@ def _retarget_generator(result, armature, options=None):
     depth_groups = _depth_groups(chains)
     # PoseBone.matrix uses armature object space, even when the object is rotated.
     world_to_pose = armature.matrix_world.inverted().to_3x3()
+    # The foot correction caches per-sequence data on the options object, and that
+    # cache also holds per-frame bend state. Clearing it here gives every run a
+    # fresh start, so running the same options twice produces the same Action.
+    options._foot_correction = None
 
     previous_active, previous_mode = _activate(armature)
     action = _ensure_action(armature, options.action_name or result.action_name())
@@ -615,6 +665,33 @@ def _retarget_generator(result, armature, options=None):
                         continue
                     _apply_pose_rotation(pose_bone, rotation)
                 bpy.context.view_layer.update()
+
+            # Optionally re-solve the legs onto the capture's foot placement. This
+            # must run after the direction pass and before the keys are inserted,
+            # so the Action holds the corrected pose (see blender/foot_ik.py).
+            # Moving the shin invalidates the foot's world orientation, so the
+            # foot is resolved again through the same rule the pass used.
+            if options.foot_correction and not image:
+                from . import foot_ik
+                foot_chains = {chain.spec.target[-1]: chain for chain in chains
+                               if chain.spec.target.startswith('foot_fk.')}
+
+                def reapply_foot(side, _frame=frame, _chains=foot_chains):
+                    chain = _chains.get(side)
+                    if chain is None:
+                        return
+                    pose_bone = armature.pose.bones.get(chain.bone_name)
+                    if pose_bone is None:
+                        return
+                    rotation = _target_rotation(chain, _frame, world_to_pose)
+                    if rotation is not None:
+                        _apply_pose_rotation(pose_bone, rotation)
+                        bpy.context.view_layer.update()
+
+                foot_ik.apply_foot_correction(
+                    armature, result, position, options, scale, world_to_pose, warnings,
+                    reapply_foot=reapply_foot,
+                    hips=_hips_in_pose_space(armature, frame, chains, scale, origin, options))
 
             for chain in chains:
                 pose_bone = armature.pose.bones.get(chain.bone_name)

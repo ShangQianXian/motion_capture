@@ -60,6 +60,12 @@ PROP_ROOT_MOTION = "根位移"
 PROP_ROOT_MOTION_DESC = "保留世界位移，或固定在原地只保留起伏"
 PROP_SWITCH_FK = "切换四肢为 FK"
 PROP_SWITCH_FK_DESC = "把 Rigify 的 IK_FK 设为 FK，让写入的 FK 关键帧真正驱动变形骨"
+PROP_FOOT_CORRECTION = "足部落点校正"
+PROP_FOOT_CORRECTION_DESC = (
+    "按素材的脚踝位置重新求解大小腿，补偿目标骨架与素材人物的骨长差异。"
+    "实测把脚踝偏移从 11.6/4.8 cm 降到 3.2/2.8 cm；代价是腿的朝向会有约 6° 变化"
+    "（髋和脚都对齐时，膝盖是唯一还能动的关节）。关掉则只传方向，脚落在骨架自己的腿长上"
+)
 PROP_FLIP_X = "左右镜像 (Flip X)"
 PROP_FLIP_X_DESC = "当动作左右颠倒时勾选，导入时对 X 轴取反"
 PROP_PITCH_CORRECTION = "倾斜校正（X）"
